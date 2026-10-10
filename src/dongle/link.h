@@ -11,6 +11,7 @@
 
 #include "dongle/mt76.h"
 #include "dongle/mt76_radio.h"
+#include "pad.h"
 
 #include <time.h>
 
@@ -29,6 +30,8 @@ typedef struct {
     int     radio_active;   /* adapter currently owns this client slot */
     int     silence_reported;
     int     battery_level, battery_type;
+    time_t  active_at;          /* last real use, for switching idle ones off */
+    pad_state idle_ref;         /* the state that use is measured from */
     long    rssi_sum, rssi_n;   /* signal readings since the last report */
     int     rssi_min, rssi_max;
 } link_client;
@@ -52,6 +55,10 @@ void link_init(dlink *l, mt76 *m, mt76_radio *r);
 /* With `on`, each controller's first GIP messages and button changes are
  * logged in full. */
 void link_set_trace(int on);
+
+/* Switches a wireless controller off after `minutes` without use, as a
+ * console does; 0 never does. */
+void link_set_idle_off(int minutes);
 
 /* Opens (for the standard 60 seconds) or closes the pairing window. */
 void link_set_pairing(dlink *l, int on, const char *why);

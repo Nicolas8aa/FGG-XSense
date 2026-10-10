@@ -7,6 +7,7 @@
 #include "pads.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -34,6 +35,11 @@
 
 /* A pairing window that would not close is tried again this much later. */
 #define PAIRING_RETRY_SECONDS 5
+
+/* How far a trigger (0-1023) or a stick axis may drift and still count as
+ * the controller lying untouched, for switching idle controllers off. */
+#define IDLE_TRIGGER_SLACK 40
+#define IDLE_STICK_SLACK   4000
 
 /* An announce repeats until the controller is answered; answer at most this
  * often so a burst of announces is not met with a burst of start-ups. */
@@ -101,8 +107,10 @@ static void led(dlink *l)
 }
 
 static int g_trace;
+static int g_idle_off_seconds;
 
 void link_set_trace(int on) { g_trace = on; }
+void link_set_idle_off(int minutes) { g_idle_off_seconds = minutes > 0 ? minutes * 60 : 0; }
 
 void link_init(dlink *l, mt76 *m, mt76_radio *r)
 {
@@ -223,7 +231,7 @@ static void resume_client(dlink *l, int wcid, const uint8_t *addr)
     }
     c->radio_active = 1;
     c->lost_at = 0;
-    c->connected_at = time(NULL);
+    c->connected_at = c->active_at = time(NULL);
     c->silence_reported = 0;
     l->nclients++;
     led(l);
@@ -285,7 +293,7 @@ static void associate(dlink *l, const uint8_t *addr)
     log_line("  adapter: controller %02x:%02x:%02x:%02x:%02x:%02x connected "
              "as client %d", addr[0], addr[1], addr[2], addr[3], addr[4],
              addr[5], wcid);
-    l->clients[wcid - 1].connected_at = time(NULL);
+    l->clients[wcid - 1].connected_at = l->clients[wcid - 1].active_at = time(NULL);
     notify("FGG-XSense: controller connected to the adapter");
 }
 
@@ -406,6 +414,19 @@ static void start_client(dlink *l, int wcid)
     c->last_init = time(NULL);
 }
 
+/* Whether `st` differs from `ref` by more than a resting controller's
+ * jitter: any button, or a trigger or stick that really moved. */
+static int in_use(const pad_state *st, const pad_state *ref)
+{
+    return st->buttons != ref->buttons ||
+           abs((int)st->lt - (int)ref->lt) > IDLE_TRIGGER_SLACK ||
+           abs((int)st->rt - (int)ref->rt) > IDLE_TRIGGER_SLACK ||
+           abs(st->lx - ref->lx) > IDLE_STICK_SLACK ||
+           abs(st->ly - ref->ly) > IDLE_STICK_SLACK ||
+           abs(st->rx - ref->rx) > IDLE_STICK_SLACK ||
+           abs(st->ry - ref->ry) > IDLE_STICK_SLACK;
+}
+
 static void client_input(dlink *l, int wcid, const pad_state *st)
 {
     link_client *c = &l->clients[wcid - 1];
@@ -417,6 +438,12 @@ static void client_input(dlink *l, int wcid, const pad_state *st)
         snprintf(id, sizeof id, "%02x:%02x:%02x:%02x:%02x:%02x", c->addr[0],
                  c->addr[1], c->addr[2], c->addr[3], c->addr[4], c->addr[5]);
         c->pad = pads_attach("wireless", id);
+        if (c->pad >= 0 && c->battery_level >= 0)
+            pads_battery(c->pad, c->battery_level, c->battery_type);
+    }
+    if (in_use(st, &c->idle_ref)) {
+        c->idle_ref = *st;
+        c->active_at = time(NULL);
     }
     if (c->pad >= 0) pads_update(c->pad, st);
 
@@ -438,10 +465,7 @@ static void client_battery(dlink *l, int wcid, const unsigned char *msg, int n)
     if (!gip_decode_battery(msg, n, &level, &type) ||
         (level == c->battery_level && type == c->battery_type))
         return;
-    /* Once, as the batteries become low -- not on every report after. */
-    if (gip_battery_is_low(level, type) &&
-        !gip_battery_is_low(c->battery_level, c->battery_type))
-        notify("FGG-XSense: Xbox controller battery low");
+    if (c->pad >= 0) pads_battery(c->pad, level, type);
     c->battery_level = level;
     c->battery_type = type;
     log_line("  adapter: client %d battery %s (%s)", wcid,
@@ -684,9 +708,19 @@ void link_handle(dlink *l, const unsigned char *p, uint32_t len)
     }
 }
 
+/* Asks the controller to switch itself off. It then drops off the radio
+ * like any controller switched off by hand. */
+static void power_off_client(dlink *l, int wcid)
+{
+    link_client *c = &l->clients[wcid - 1];
+    unsigned char msg[GIP_HEADER_SIZE + 4];
+
+    send_gip(l, wcid, msg,
+             gip_build_power_off(msg, (int)sizeof msg, (unsigned)(++c->seq & 0xFF)));
+}
+
 void link_close(dlink *l, int power_off)
 {
-    unsigned char msg[GIP_HEADER_SIZE + 4];
     int i;
 
     /* Switched off rather than left connected to nothing, as Windows and
@@ -695,9 +729,7 @@ void link_close(dlink *l, int power_off)
         for (i = 0; i < MT76_MAX_CLIENTS; i++) {
             link_client *c = &l->clients[i];
             if (!c->used || !c->radio_active) continue;
-            send_gip(l, i + 1, msg,
-                     gip_build_power_off(msg, (int)sizeof msg,
-                                         (unsigned)(++c->seq & 0xFF)));
+            power_off_client(l, i + 1);
         }
         usleep(200000);   /* let the radio send them */
     }
@@ -735,6 +767,19 @@ void link_tick(dlink *l, time_t now)
 
     if (l->pairing && now >= l->pairing_until)
         link_set_pairing(l, 0, "timed out");
+
+    for (i = 0; i < MT76_MAX_CLIENTS && g_idle_off_seconds; i++) {
+        link_client *c = &l->clients[i];
+        if (!c->used || !c->radio_active ||
+            now - c->active_at < g_idle_off_seconds)
+            continue;
+        log_line("  adapter: client %d untouched for %d minutes -- switching it off",
+                 i + 1, g_idle_off_seconds / 60);
+        notify("FGG-XSense: controller switched off after %d minutes idle",
+               g_idle_off_seconds / 60);
+        power_off_client(l, i + 1);
+        c->active_at = now;   /* once, not again while it goes */
+    }
 
     for (i = 0; i < MT76_MAX_CLIENTS; i++) {
         link_client *c = &l->clients[i];
