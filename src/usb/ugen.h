@@ -73,4 +73,9 @@ int ugen_fs_start(ugen *u, int slot, uint32_t len);
  * was collected, 0 when nothing has finished. */
 int ugen_fs_complete(ugen *u, ugen_completion *c);
 
+/* Waits up to `timeout_ms` for `slot` to finish, discarding completions of
+ * other slots. For simple synchronous exchanges where nothing else is in
+ * flight. Returns 1 with `c` filled, 0 on timeout. */
+int ugen_fs_wait(ugen *u, int slot, int timeout_ms, ugen_completion *c);
+
 #endif

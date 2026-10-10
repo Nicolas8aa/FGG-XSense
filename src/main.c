@@ -12,7 +12,7 @@
  *   gip/gip_wired.c   a controller on a USB cable, one thread each
  *   usb/ugen.c        USB device nodes and transfer slots
  *   usb/usb_enum.c    finding devices without two backends sharing one
- *   dongle/           the Xbox Wireless Adapter (firmware check so far)
+ *   dongle/           the Xbox Wireless Adapter (firmware start so far)
  *
  * Resident: it waits for controllers, serves them while connected and waits
  * again, so it can be autoloaded before one is plugged in. Holding View+Menu
@@ -52,9 +52,17 @@ typedef struct {
 
 static backend g_backends[PADS_MAX];
 
-/* The wireless adapter, held from the moment it is seen so no scan opens it
- * again. Only checked for now; the radio is brought up in a later milestone. */
-static char g_adapter[USB_NODE_LEN];
+/* The wireless adapter's thread. One adapter is supported. */
+static backend g_adapter;
+
+static void *adapter_thread(void *arg)
+{
+    backend *b = arg;
+
+    dongle_run(b->node);
+    b->done = 1;
+    return NULL;
+}
 
 static void *wired_thread(void *arg)
 {
@@ -69,6 +77,12 @@ static void *wired_thread(void *arg)
 static void reap(void)
 {
     int i;
+
+    if (g_adapter.active && g_adapter.done) {
+        pthread_join(g_adapter.thread, NULL);
+        usb_disown(g_adapter.node);
+        g_adapter.active = 0;
+    }
 
     for (i = 0; i < PADS_MAX; i++) {
         if (g_backends[i].active && g_backends[i].done) {
@@ -101,8 +115,13 @@ static int scan(void)
         started++;
     }
 
-    if (!g_adapter[0] && usb_find_and_own(dongle_match, g_adapter))
-        dongle_report(g_adapter);
+    if (!g_adapter.active && usb_find_and_own(dongle_match, g_adapter.node)) {
+        g_adapter.done = 0;
+        if (pthread_create(&g_adapter.thread, NULL, adapter_thread, &g_adapter) == 0)
+            g_adapter.active = 1;
+        else
+            usb_disown(g_adapter.node);
+    }
 
     return started;
 }
@@ -134,6 +153,7 @@ int main(void)
 
     config_load(CONFIG_PATH);
     pads_set_mirror(config_int("mirror", 0));
+    dongle_set_trace(config_int("trace_mt76", 0));
     if (config_int("mirror", 0))
         log_line("  mirror=1: every controller is published twice");
 
@@ -176,7 +196,11 @@ int main(void)
         }
     }
 
-    if (g_adapter[0]) usb_disown(g_adapter);
+    if (g_adapter.active) {
+        pthread_join(g_adapter.thread, NULL);
+        usb_disown(g_adapter.node);
+        g_adapter.active = 0;
+    }
 
     notify("FGG-XSense: stopped");
     lock_release();

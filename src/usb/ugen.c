@@ -224,3 +224,15 @@ int ugen_fs_complete(ugen *u, ugen_completion *c)
     c->len = u->buflen[slot][0];
     return 1;
 }
+
+int ugen_fs_wait(ugen *u, int slot, int timeout_ms, ugen_completion *c)
+{
+    int waited;
+
+    for (waited = 0; waited <= timeout_ms; waited++) {
+        while (ugen_fs_complete(u, c))
+            if (c->slot == slot) return 1;
+        usleep(1000);
+    }
+    return 0;
+}

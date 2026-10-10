@@ -23,7 +23,8 @@ CFLAGS := -std=c11 -Wall -Wextra -Werror -O2 -Isrc
 SRCS := src/main.c src/pads.c src/vpad.c src/lock.c src/config.c src/log.c \
         src/gip/gip_proto.c src/gip/gip_wired.c \
         src/usb/ugen.c src/usb/usb_enum.c src/sha256.c \
-        src/dongle/dongle.c src/dongle/mt76_fw.c
+        src/dongle/dongle.c src/dongle/mt76_fw.c \
+        src/dongle/mt76.c src/dongle/mt76_boot.c
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS))
 
 .PHONY: all clean test probe check
