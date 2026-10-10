@@ -516,11 +516,27 @@ void link_handle(dlink *l, const unsigned char *p, uint32_t len)
     }
 }
 
-void link_close(dlink *l)
+void link_close(dlink *l, int power_off)
 {
+    unsigned char msg[GIP_HEADER_SIZE + 4];
     int i;
+
+    /* Switched off rather than left connected to nothing, as Windows and
+     * xone do when the host goes away. */
+    if (power_off) {
+        for (i = 0; i < MT76_MAX_CLIENTS; i++) {
+            link_client *c = &l->clients[i];
+            if (!c->used) continue;
+            send_gip(l, i + 1, msg,
+                     gip_build_power_off(msg, (int)sizeof msg,
+                                         (unsigned)(++c->seq & 0xFF)));
+        }
+        usleep(200000);   /* let the radio send them */
+    }
+
     for (i = 0; i < MT76_MAX_CLIENTS; i++)
-        if (l->clients[i].used) remove_client(l, i + 1, "stopping");
+        if (l->clients[i].used)
+            remove_client(l, i + 1, power_off ? "switched off" : "adapter gone");
 }
 
 void link_tick(dlink *l, time_t now)

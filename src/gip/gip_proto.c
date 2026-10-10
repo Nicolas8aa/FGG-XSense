@@ -46,14 +46,23 @@ int gip_build_ack(unsigned char *buf, int cap, const unsigned char *msg)
 {
     unsigned char body[9];
 
-    /* The payload carries the command, options and length of the message being
-     * answered; the header echoes its sequence number. */
+    /* The payload carries the command and length of the message being
+     * answered, and options of its own: the sender's device ID as an
+     * internal message -- not the original options, whose acknowledge flag a
+     * controller on the wireless adapter does not accept back (xone
+     * gip_acknowledge_pkt). The header echoes the sequence number. */
     memset(body, 0, sizeof body);
     body[1] = msg[0];
-    body[2] = msg[1];
+    body[2] = (unsigned char)(GIP_OPT_SYSTEM | (msg[1] & 0x0F));
     body[3] = msg[3];
 
     return gip_build(buf, cap, GIP_CMD_ACK, msg[2], body, (int)sizeof body);
+}
+
+int gip_build_power_off(unsigned char *buf, int cap, unsigned seq)
+{
+    static const unsigned char off[] = { GIP_POWER_OFF };
+    return gip_build(buf, cap, GIP_CMD_SET_DEVICE_STATE, seq, off, (int)sizeof off);
 }
 
 int gip_decode_input(const unsigned char *msg, int n, pad_state *out)

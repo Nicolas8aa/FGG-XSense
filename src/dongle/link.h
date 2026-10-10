@@ -47,8 +47,9 @@ void link_set_pairing(dlink *l, int on, const char *why);
 /* Handles one incoming message from either endpoint. */
 void link_handle(dlink *l, const unsigned char *p, uint32_t len);
 
-/* Removes every controller, e.g. when the payload stops. */
-void link_close(dlink *l);
+/* Removes every controller: switching each off first when the payload is
+ * stopping, not when the adapter has already gone. */
+void link_close(dlink *l, int power_off);
 
 /* Housekeeping: pairing timeout, the pairing trigger file, the periodic
  * summary. */

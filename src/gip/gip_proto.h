@@ -54,9 +54,16 @@ int gip_build(unsigned char *buf, int cap, unsigned cmd, unsigned seq,
  * for the acknowledgement and stops talking to a host that ignores it. */
 int gip_wants_ack(const unsigned char *msg);
 
-/* Builds the acknowledgement for `msg`. Returns its length, or -1. Mirrors
- * the packet Linux xpad sends in xpadone_ack_mode_report. */
+/* Builds the acknowledgement for `msg`. Returns its length, or -1. Follows
+ * xone's gip_acknowledge_pkt. */
 int gip_build_ack(unsigned char *buf, int cap, const unsigned char *msg);
+
+/* Power modes for GIP_CMD_SET_DEVICE_STATE (xone enum gip_power_mode). */
+#define GIP_POWER_ON  0x00
+#define GIP_POWER_OFF 0x04
+
+/* Builds the message that switches a controller off. Returns its length. */
+int gip_build_power_off(unsigned char *buf, int cap, unsigned seq);
 
 /* Decodes an input report. Returns 1 and fills `out` if `msg` is one, 0 if
  * it is some other message or too short. */

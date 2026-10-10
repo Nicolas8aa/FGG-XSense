@@ -162,7 +162,7 @@ static void test_ack(void)
     /* A status message (cmd 03) with the ACK option, sequence 7, length 4. */
     const unsigned char msg[] = { 0x03, 0x30, 0x07, 0x04, 1, 2, 3, 4 };
     const unsigned char want[] = { 0x01, 0x20, 0x07, 0x09,
-                                   0x00, 0x03, 0x30, 0x04, 0, 0, 0, 0, 0 };
+                                   0x00, 0x03, 0x20, 0x04, 0, 0, 0, 0, 0 };
     unsigned char got[32];
     int n;
 
@@ -170,6 +170,15 @@ static void test_ack(void)
     n = gip_build_ack(got, (int)sizeof got, msg);
     CHECK(n == (int)sizeof want && memcmp(got, want, sizeof want) == 0,
           "acknowledgement bytes differ (len %d)", n);
+}
+
+static void test_power_off(void)
+{
+    unsigned char buf[16];
+    int n = gip_build_power_off(buf, (int)sizeof buf, 9);
+
+    CHECK(n == 5 && buf[0] == 0x05 && buf[1] == 0x20 && buf[2] == 9 &&
+          buf[3] == 1 && buf[4] == 0x04, "power-off message wrong");
 }
 
 static void test_init_sequence(void)
@@ -255,6 +264,7 @@ int main(void)
     test_translation_unchanged();
     test_decode_rejects();
     test_ack();
+    test_power_off();
     test_init_sequence();
     test_sha256();
     test_fw_parse();
