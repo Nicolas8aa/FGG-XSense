@@ -32,8 +32,9 @@ typedef struct {
  * the best 5 GHz channel. Takes effect at the next radio start. */
 void mt76_radio_force_channel(int channel);
 
-/* Returns 0 if a step failed; the log says which. */
-int mt76_radio_init(mt76 *m, mt76_radio *r);
+/* Returns 0 if a step failed; the log says which. `warm` is set when the
+ * firmware was restarted in place rather than uploaded afresh. */
+int mt76_radio_init(mt76 *m, mt76_radio *r, int warm);
 
 /* Opens or closes the pairing window: the beacon advertises it, and the
  * receive filter is widened to let pairing requests in. */

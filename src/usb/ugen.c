@@ -236,3 +236,12 @@ int ugen_fs_wait(ugen *u, int slot, int timeout_ms, ugen_completion *c)
     }
     return 0;
 }
+
+int ugen_fs_clear_stall(ugen *u, int slot)
+{
+    struct usb_fs_clear_stall_sync cs;
+
+    memset(&cs, 0, sizeof cs);
+    cs.ep_index = (uint8_t)slot;
+    return ioctl(u->fd, USB_FS_CLEAR_STALL_SYNC, &cs) == 0;
+}

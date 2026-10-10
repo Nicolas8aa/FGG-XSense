@@ -200,7 +200,7 @@ void *dongle_run(void *arg)
         goto done;
     }
 
-    if (!mt76_radio_init(&m, &radio)) {
+    if (!mt76_radio_init(&m, &radio, r == MT76_BOOT_RESTARTED)) {
         notify("FGG-XSense: adapter radio did not start - unplug and replug it");
         watch(&m, node);
         goto done;

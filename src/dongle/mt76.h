@@ -52,6 +52,7 @@ typedef struct {
     ugen_completion deferred[MT76_DEFERRED_MAX];
     int             ndeferred;
     long            dropped;   /* completions lost because the queue was full */
+    long            stalls_cleared;
 } mt76;
 
 /* Hands back one completion that arrived while a command was waiting.

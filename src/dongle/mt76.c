@@ -99,7 +99,22 @@ int mt76_dev_mode(mt76 *m, unsigned mode)
  * payload padded to four bytes, then a four-byte zero trailer (xone
  * xone_mt76_prep_message). Waits for the write, keeping any other slot's
  * completion that arrives meanwhile. */
+static int send_message_once(mt76 *m, uint32_t info, const void *payload, unsigned len);
+
+/* A refused command can leave the endpoint stalled, after which every
+ * command fails; clearing it and sending once more turns a single refusal
+ * into a recovered one. */
 static int send_message(mt76 *m, uint32_t info, const void *payload, unsigned len)
+{
+    if (send_message_once(m, info, payload, len)) return 1;
+    if (m->err != EIO) return 0;
+    if (!ugen_fs_clear_stall(m->u, MT76_SLOT_CMD)) return 0;
+    m->stalls_cleared++;
+    usleep(10000);
+    return send_message_once(m, info, payload, len);
+}
+
+static int send_message_once(mt76 *m, uint32_t info, const void *payload, unsigned len)
 {
     unsigned char *buf;
     unsigned padded, total;
