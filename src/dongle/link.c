@@ -268,6 +268,8 @@ static void associate(dlink *l, const uint8_t *addr)
     l->clients[wcid - 1].used = 1;
     l->clients[wcid - 1].radio_active = 1;
     l->clients[wcid - 1].pad = -1;
+    l->clients[wcid - 1].battery_level = -1;
+    l->clients[wcid - 1].battery_type = -1;
     memcpy(l->clients[wcid - 1].addr, addr, 6);
     l->nclients++;
     remember(addr);
@@ -423,6 +425,20 @@ static void client_input(dlink *l, int wcid, const pad_state *in)
     c->last_buttons = st->buttons;
 }
 
+static void client_battery(dlink *l, int wcid, const unsigned char *msg, int n)
+{
+    link_client *c = &l->clients[wcid - 1];
+    int level, type;
+
+    if (!gip_decode_battery(msg, n, &level, &type) ||
+        (level == c->battery_level && type == c->battery_type))
+        return;
+    c->battery_level = level;
+    c->battery_type = type;
+    log_line("  adapter: client %d battery %s (%s)", wcid,
+             gip_battery_level_name(level), gip_battery_type_name(type));
+}
+
 /* One radio frame's payload from a client: GIP messages back to back.
  * `rssi` is the frame's signal strength in dBm, or 0 if unknown. */
 static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len,
@@ -481,9 +497,7 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
             }
             break;
         case GIP_CMD_STATUS:
-            if (n >= GIP_HEADER_SIZE + 1 && c->inputs == 0)
-                log_line("  adapter: client %d status %02X", wcid,
-                         p[GIP_HEADER_SIZE]);
+            client_battery(l, wcid, p, (int)n);
             break;
         case GIP_CMD_AUTHENTICATE:
             log_line("  adapter: client %d sent an authentication message", wcid);

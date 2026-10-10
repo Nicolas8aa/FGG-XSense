@@ -29,6 +29,7 @@ typedef struct {
     time_t  lost_at;        /* nonzero while retaining a pad across reconnect */
     int     radio_active;   /* adapter currently owns this client slot */
     int     silence_reported;
+    int     battery_level, battery_type;
     long    rssi_sum, rssi_n;   /* signal readings since the last report */
     pad_state last;             /* latest input, for the guide button */
     int     guide;

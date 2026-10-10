@@ -72,6 +72,32 @@ int gip_decode_guide(const unsigned char *msg, int n, int *down)
     return 1;
 }
 
+int gip_decode_battery(const unsigned char *msg, int n, int *level, int *type)
+{
+    unsigned char status;
+
+    if (n < GIP_HEADER_SIZE + 1 || msg[0] != GIP_CMD_STATUS) return 0;
+    status = msg[GIP_HEADER_SIZE];
+    *level = status & 0x03;
+    *type = (status >> 2) & 0x03;
+    return 1;
+}
+
+const char *gip_battery_level_name(int level)
+{
+    static const char *const names[] = { "low", "normal", "high", "full" };
+    return level >= 0 && level < 4 ? names[level] : "unknown";
+}
+
+const char *gip_battery_type_name(int type)
+{
+    static const char *const names[] = {
+        "charging or external power", "standard battery", "rechargeable pack",
+        "unknown power source",
+    };
+    return type >= 0 && type < 4 ? names[type] : "unknown power source";
+}
+
 int gip_decode_input(const unsigned char *msg, int n, pad_state *out)
 {
     const unsigned char *d = msg + GIP_HEADER_SIZE;
