@@ -217,6 +217,18 @@ void *dongle_run(void *arg)
     notify("FGG-XSense: wireless adapter radio on");
     run_radio(&m, &radio, node);
 
+    /* Stopping, with the adapter still plugged in: leave it as a cold start
+     * would find it. Not when it was unplugged -- there is nothing to talk
+     * to. */
+    if (pads_stopping()) {
+        uint32_t left;
+        mt76_radio_shutdown(&m);
+        left = mt76_firmware_release(&m);
+        log_line("  adapter: firmware reset on the way out, FCE_DMA_ADDR %08X -- the next "
+                 "start should %s", (unsigned)left,
+                 left == 0 ? "upload afresh (cold)" : "find it still running");
+    }
+
 done:
     mt76_fw_free(&fw);
     ugen_close(m.u);

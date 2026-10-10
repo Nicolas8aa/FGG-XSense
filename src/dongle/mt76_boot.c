@@ -155,6 +155,15 @@ mt76_boot_result mt76_boot(mt76 *m, const mt76_fw *fw)
     return state ? warm(m, fw) : cold(m, fw);
 }
 
+uint32_t mt76_firmware_release(mt76 *m)
+{
+    uint32_t last = 0xFFFFFFFF;
+
+    if (!mt76_dev_mode(m, DEV_MODE_RESET)) return last;
+    mt76_poll(m, CFG(MT_FCE_DMA_ADDR), 0xFFFFFFFF, 0, &last);
+    return last;
+}
+
 const char *mt76_boot_name(mt76_boot_result r)
 {
     switch (r) {

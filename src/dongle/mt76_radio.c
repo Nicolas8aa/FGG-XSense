@@ -369,6 +369,16 @@ static int write_beacon(mt76 *m, mt76_radio *r, int pair)
     return mt76_write_burst(m, MT_BEACON_BASE, b, sizeof b);
 }
 
+void mt76_radio_shutdown(mt76 *m)
+{
+    int ok = mt76_wr(m, MT_BEACON_TIME_CFG, 0) &&
+             mt76_wr(m, MT_MAC_SYS_CTRL, 0) &&
+             set_power_mode(m, MT_RADIO_OFF);
+
+    log_line("  radio: %s", ok ? "beacon off, radio powered down"
+                               : "could not power the radio down");
+}
+
 int mt76_radio_set_pairing(mt76 *m, mt76_radio *r, int enable)
 {
     return mt76_wr(m, MT_RX_FILTR_CFG, enable ? RX_FILTER_WIDE : RX_FILTER_NORMAL) &&
