@@ -22,6 +22,10 @@
  * unavailable, with the original credentials put back. */
 int vpad_sce_init(void);
 
+/* With `on`, the system log read while identifying a new pad is copied into
+ * ours. */
+void vpad_sce_set_trace(int on);
+
 /* Puts the original credentials back. */
 void vpad_sce_shutdown(void);
 

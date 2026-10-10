@@ -52,6 +52,10 @@ typedef struct {
 
 void link_init(dlink *l, mt76 *m, mt76_radio *r);
 
+/* With `on`, each controller's first GIP messages and button changes are
+ * logged in full. */
+void link_set_trace(int on);
+
 /* Opens (for the standard 60 seconds) or closes the pairing window. */
 void link_set_pairing(dlink *l, int on, const char *why);
 

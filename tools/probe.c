@@ -347,7 +347,7 @@ int main(void)
     struct stat stv;
     int bus, unit, adapters = 0, radios = 0;
 
-    if (!log_open(STATE_DIR, LOG_PATH)) return 1;
+    if (!log_open(STATE_DIR, LOG_PATH, NULL)) return 1;
 
     log_line("========================================");
     log_line("FGG-XSense probe -- read-only USB survey");

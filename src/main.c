@@ -23,6 +23,7 @@
  */
 #include "config.h"
 #include "dongle/dongle.h"
+#include "dongle/link.h"
 #include "dongle/mt76_radio.h"
 #include "gip/gip_wired.h"
 #include "lock.h"
@@ -38,6 +39,7 @@
 
 #define STATE_DIR "/data/fgg-xsense"
 #define LOG_PATH  STATE_DIR "/xsense.log"
+#define LOG_OLD_PATH STATE_DIR "/xsense.old.log"   /* the previous run's */
 
 /* Creating this file (e.g. over FTP) stops the payload, as View+Menu does. */
 #define STOP_TRIGGER STATE_DIR "/stop"
@@ -145,21 +147,26 @@ int main(void)
     time_t last_scan = 0, last_beat = 0;
     int waiting = 0, i;
 
-    if (!log_open(STATE_DIR, LOG_PATH)) return 1;
+    if (!log_open(STATE_DIR, LOG_PATH, LOG_OLD_PATH)) return 1;
 
-    log_line("========================================");
-    log_line("FGG-XSense -- Xbox controller on PlayStation 5");
-
+    /* The log is started afresh only once the lock is ours: a second copy
+     * must not move the running copy's log out from under it. */
     if (!lock_take()) {
-        log_line("  another copy is already running -- exiting");
+        log_line("FGG-XSense: another copy is already running -- exiting");
         notify("FGG-XSense: already running");
         log_close();
         return 1;
     }
+    log_fresh();
+
+    log_line("========================================");
+    log_line("FGG-XSense -- Xbox controller on PlayStation 5");
 
     config_load(CONFIG_PATH);
     pads_set_mirror(config_int("mirror", 0));
     dongle_set_trace(config_int("trace_mt76", 0));
+    link_set_trace(config_int("trace_gip", 0));
+    vpad_sce_set_trace(config_int("trace_klog", 0));
     mt76_radio_force_channel(config_int("adapter_channel", 0));
     if (config_int("mirror", 0))
         log_line("  mirror=1: every controller is published twice");

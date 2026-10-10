@@ -121,6 +121,7 @@ static uint64_t g_orig_authid;
 static uint8_t  g_orig_caps[16];
 static int      g_raised;
 static int      g_ready;
+static int      g_trace;
 
 /* Set after the first failure to add a pad: every AddDevice creates a
  * device, so after one goes wrong no further call is made this session. */
@@ -305,8 +306,8 @@ static uint64_t virtual_device_in(const char *line)
     return hex_after(line, "DeviceId");
 }
 
-/* Reads what the log has. Every line is copied into our own log: /dev/klog
- * has one reader, so whatever is read here is otherwise lost. Returns the
+/* Reads what the log has. With trace_klog=1 every line is copied into our own
+ * log: /dev/klog has one reader, so whatever is read here is otherwise lost. Returns the
  * number of matching devices seen, and the first in `dev`. */
 static int read_log(int fd, char *line, size_t *len, size_t cap, uint64_t *dev,
                     int copy)
@@ -366,7 +367,7 @@ int32_t vpad_sce_add(char *why, int whylen)
         snprintf(why, (size_t)whylen, "/dev/klog: %s", strerror(errno));
         goto out;
     }
-    read_log(fd, line, &len, sizeof line, &ignored, 1);   /* not ours */
+    read_log(fd, line, &len, sizeof line, &ignored, g_trace);   /* not ours */
     len = 0;
 
     /* The parameter block as the PS5 accepts it: size 32, user 1, the rest
@@ -389,7 +390,7 @@ int32_t vpad_sce_add(char *why, int whylen)
     start = now_ms();
     while (!found && now_ms() - start < IDENTIFY_MS) {
         uint64_t d = 0;
-        int n = read_log(fd, line, &len, sizeof line, &d, 1);
+        int n = read_log(fd, line, &len, sizeof line, &d, g_trace);
         if (n > 0) {
             dev = d;
             found = n;
@@ -400,7 +401,7 @@ int32_t vpad_sce_add(char *why, int whylen)
     if (found == 1) {
         uint64_t d = 0;
         usleep(300000);
-        if (read_log(fd, line, &len, sizeof line, &d, 1) > 0 && d != dev) found++;
+        if (read_log(fd, line, &len, sizeof line, &d, g_trace) > 0 && d != dev) found++;
     }
     close(fd);
 
@@ -480,6 +481,8 @@ out:
 
 static uint8_t axis(int16_t v)     { return (uint8_t)(((int)v + 32768) >> 8); }
 static uint8_t axis_inv(int16_t v) { return (uint8_t)((32767 - (int)v) >> 8); }
+
+void vpad_sce_set_trace(int on) { g_trace = on; }
 
 int vpad_sce_ready(void) { return g_ready; }
 
