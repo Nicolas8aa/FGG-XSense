@@ -450,9 +450,16 @@ static void wlan_frame(dlink *l, const unsigned char *p, uint32_t len)
     switch (fc & FC_TYPE_MASK) {
     case FC_QOS_DATA:
         /* After the firmware restarts in place it can still number a
-         * controller by its previous run's slot; the sender's address is
-         * what identifies it. */
-        if (wcid < 1 || wcid > MT76_MAX_CLIENTS || !l->clients[wcid - 1].used ||
+         * controller by its previous run's slot. The frame is then matched by
+         * its sender's address -- but only if the firmware recognised the
+         * sender as one of its stations at all; frames from unknown senders
+         * are dropped. (The link is not encrypted, so the firmware's own
+         * station match is by address too: this trusts nothing more.) */
+        if (wcid < 1 || wcid > MT76_MAX_CLIENTS) {
+            l->ignored++;
+            break;
+        }
+        if (!l->clients[wcid - 1].used ||
             memcmp(l->clients[wcid - 1].addr, addr2, 6) != 0) {
             int i, found = 0;
             for (i = 0; i < MT76_MAX_CLIENTS && !found; i++)
