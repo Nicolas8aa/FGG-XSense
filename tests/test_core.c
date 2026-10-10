@@ -195,6 +195,11 @@ static void test_battery(void)
           "battery type label wrong");
     CHECK(!gip_decode_battery(status, GIP_HEADER_SIZE, &level, &type),
           "short status accepted");
+    CHECK(gip_battery_is_low(0, 1) && gip_battery_is_low(0, 2),
+          "low batteries not reported");
+    CHECK(!gip_battery_is_low(0, 0), "low while charging reported");
+    CHECK(!gip_battery_is_low(1, 1), "normal level reported as low");
+    CHECK(!gip_battery_is_low(-1, -1), "no reading reported as low");
 }
 
 static void test_init_sequence(void)

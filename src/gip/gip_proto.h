@@ -76,6 +76,10 @@ int gip_decode_battery(const unsigned char *msg, int n, int *level, int *type);
 const char *gip_battery_level_name(int level);
 const char *gip_battery_type_name(int type);
 
+/* Whether a reading means the batteries need attention: level low while
+ * running on batteries, not while charging or on external power. */
+int gip_battery_is_low(int level, int type);
+
 /* Decodes an input report. Returns 1 and fills `out` if `msg` is one, 0 if
  * it is some other message or too short. */
 int gip_decode_input(const unsigned char *msg, int n, pad_state *out);
