@@ -206,6 +206,14 @@ void *dongle_run(void *arg)
         goto done;
     }
 
+    /* Firmware restarted in place keeps its client table from the last
+     * run, and a controller reconnecting into a stale slot has been seen to
+     * associate but then send nothing. Every slot is cleared first. */
+    if (r == MT76_BOOT_RESTARTED) {
+        for (i = 1; i <= MT76_MAX_CLIENTS; i++) mt76_radio_remove_client(&m, i);
+        log_line("  adapter: cleared the firmware's client table");
+    }
+
     notify("FGG-XSense: wireless adapter radio on");
     run_radio(&m, &radio, node);
 

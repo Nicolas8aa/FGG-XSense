@@ -223,6 +223,7 @@ static void associate(dlink *l, const uint8_t *addr)
     log_line("  adapter: controller %02x:%02x:%02x:%02x:%02x:%02x connected "
              "as client %d", addr[0], addr[1], addr[2], addr[3], addr[4],
              addr[5], wcid);
+    l->clients[wcid - 1].connected_at = time(NULL);
     notify("FGG-XSense: controller connected to the adapter");
 }
 
@@ -566,6 +567,21 @@ void link_close(dlink *l, int power_off)
 void link_tick(dlink *l, time_t now)
 {
     static time_t last_note;
+    int i;
+
+    /* A controller that associates and then stays silent is not usable;
+     * after a firmware restart in place that has been the symptom, and only
+     * a replug has cured it. Say so rather than leave it a mystery. */
+    for (i = 0; i < MT76_MAX_CLIENTS; i++) {
+        link_client *c = &l->clients[i];
+        if (c->used && c->frames == 0 && !c->silence_reported &&
+            now - c->connected_at >= 15) {
+            c->silence_reported = 1;
+            log_line("  adapter: client %d connected but sends nothing -- "
+                     "unplug and replug the adapter", i + 1);
+            notify("FGG-XSense: controller not responding - replug the adapter");
+        }
+    }
 
     if (l->pairing && now >= l->pairing_until)
         link_set_pairing(l, 0, "timed out");

@@ -24,6 +24,8 @@ typedef struct {
     time_t  last_init;      /* when the start-up sequence was last sent */
     uint32_t last_buttons;
     int     changes_logged;
+    time_t  connected_at;
+    int     silence_reported;
 } link_client;
 
 typedef struct {
