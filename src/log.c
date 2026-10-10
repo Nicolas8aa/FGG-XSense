@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +17,10 @@ typedef struct notify_request {
 int sceKernelSendNotificationRequest(int, notify_request_t *, size_t, int);
 
 static FILE *g_log;
+
+/* Backends log from their own threads; one line must not interleave with
+ * another. */
+static pthread_mutex_t g_log_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int log_open(const char *dir, const char *path)
 {
@@ -41,6 +46,7 @@ void log_line(const char *fmt, ...)
 
     if (!g_log) return;
 
+    pthread_mutex_lock(&g_log_lock);
     gmtime_r(&now, &tmv);
     if (strftime(stamp, sizeof stamp, "%H:%M:%S", &tmv) == 0)
         strcpy(stamp, "00:00:00");
@@ -54,6 +60,7 @@ void log_line(const char *fmt, ...)
     /* Flushed per line on purpose: an unflushed buffer is lost if the payload
      * faults, and a fault is exactly when the log matters most. */
     fflush(g_log);
+    pthread_mutex_unlock(&g_log_lock);
 }
 
 void notify(const char *fmt, ...)

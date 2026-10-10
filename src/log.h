@@ -13,6 +13,7 @@
 int  log_open(const char *dir, const char *path);
 void log_close(void);
 
+/* Safe to call from any thread. */
 void log_line(const char *fmt, ...);
 
 /* Puts a message in the console's notification area. */

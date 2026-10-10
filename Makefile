@@ -20,10 +20,12 @@ CFLAGS := -std=c11 -Wall -Wextra -Werror -O2 -Isrc
 # No libScePad: the host process has not loaded it, so calls into the module
 # fault. The ioctls it wraps are issued directly instead.
 
-SRCS := src/main.c src/gip.c src/vpad.c src/log.c
+SRCS := src/main.c src/pads.c src/vpad.c src/lock.c src/config.c src/log.c \
+        src/gip/gip_proto.c src/gip/gip_wired.c \
+        src/usb/ugen.c src/usb/usb_enum.c
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS))
 
-.PHONY: all clean test probe
+.PHONY: all clean test probe check
 
 all: $(ELF)
 
@@ -42,6 +44,17 @@ probe: probe.elf
 
 probe.elf: $(BUILD)/tools/probe.o $(BUILD)/src/log.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+# Host-side tests of everything that touches no device, built with the host's
+# own compiler. Named check because `test` deploys to the console.
+HOSTCC ?= gcc
+HOST_TESTS := tests/test_core.c src/gip/gip_proto.c src/vpad.c
+
+check:
+	@mkdir -p $(BUILD)/host
+	$(HOSTCC) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -Isrc -Itests \
+		-o $(BUILD)/host/test_core $(HOST_TESTS)
+	$(BUILD)/host/test_core
 
 clean:
 	rm -rf $(BUILD) $(ELF) probe.elf
