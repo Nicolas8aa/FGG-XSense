@@ -26,6 +26,8 @@ typedef struct {
     int     changes_logged;
     time_t  connected_at;
     int     silence_reported;
+    long    rssi_sum, rssi_n;   /* signal readings since the last report */
+    int     rssi_min, rssi_max;
 } link_client;
 
 typedef struct {

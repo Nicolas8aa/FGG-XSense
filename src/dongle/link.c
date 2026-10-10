@@ -349,8 +349,10 @@ static void client_input(dlink *l, int wcid, const pad_state *st)
     c->last_buttons = st->buttons;
 }
 
-/* One radio frame's payload from a client: GIP messages back to back. */
-static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len)
+/* One radio frame's payload from a client: GIP messages back to back.
+ * `rssi` is the frame's signal strength in dBm, or 0 if unknown. */
+static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len,
+                        int rssi)
 {
     link_client *c;
     char what[32];
@@ -362,6 +364,13 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
     c = &l->clients[wcid - 1];
     c->frames++;
     l->silent_drops = 0;
+
+    if (rssi < 0) {
+        if (c->rssi_n == 0 || rssi < c->rssi_min) c->rssi_min = rssi;
+        if (c->rssi_n == 0 || rssi > c->rssi_max) c->rssi_max = rssi;
+        c->rssi_sum += rssi;
+        c->rssi_n++;
+    }
 
     if (c->dumped < DUMP_PER_CLIENT) {
         c->dumped++;
@@ -411,6 +420,20 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
         p += n;
         len -= n;
     }
+}
+
+/* A frame's signal strength: the stronger of the two antennas' readings in
+ * the RX descriptor, as signed dBm. These are the raw readings; Linux's mt76
+ * adds small per-chip calibration offsets, so they are close but not exact.
+ * Returns 0 if neither reading is valid. */
+static int frame_rssi(const unsigned char *rxwi)
+{
+    int a = (int8_t)rxwi[12], b = (int8_t)rxwi[13];
+
+    if (a >= 0 && b >= 0) return 0;
+    if (a >= 0) return b;
+    if (b >= 0) return a;
+    return a > b ? a : b;
 }
 
 /* An 802.11 frame behind its RX descriptor (xone_dongle_process_wlan). */
@@ -477,7 +500,7 @@ static void wlan_frame(dlink *l, const unsigned char *p, uint32_t len)
                          "matching it by address", found, wcid);
             wcid = found;
         }
-        client_data(l, wcid, body, body_len);
+        client_data(l, wcid, body, body_len, frame_rssi(p));
         break;
     case FC_ASSOC_REQ:
         /* Channel scans can produce associations from bogus addresses. */
@@ -605,6 +628,14 @@ void link_tick(dlink *l, time_t now)
 
     if (now - last_note >= REPORT_SECONDS) {
         last_note = now;
+        for (i = 0; i < MT76_MAX_CLIENTS; i++) {
+            link_client *c = &l->clients[i];
+            if (!c->used || c->rssi_n == 0) continue;
+            log_line("  adapter: client %d signal about %ld dBm (weakest %d, "
+                     "strongest %d) over %ld frames", i + 1,
+                     c->rssi_sum / c->rssi_n, c->rssi_min, c->rssi_max, c->rssi_n);
+            c->rssi_sum = c->rssi_n = 0;
+        }
         log_line("  adapter: %ld message(s), %ld radio frame(s), %ld ignored, "
                  "%d client(s), %ld lost while sending; button %ld, lost %ld",
                  l->messages, l->wlan, l->ignored, l->nclients, l->m->dropped,
