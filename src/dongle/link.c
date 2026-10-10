@@ -32,6 +32,9 @@
 /* Button changes logged per controller, to check every input arrives. */
 #define CHANGES_LOGGED 200
 
+/* A pairing window that would not close is tried again this much later. */
+#define PAIRING_RETRY_SECONDS 5
+
 /* An announce repeats until the controller is answered; answer at most this
  * often so a burst of announces is not met with a burst of start-ups. */
 #define INIT_INTERVAL_SECONDS 1
@@ -97,6 +100,10 @@ static void led(dlink *l)
                        l->nclients ? MT76_LED_ON : MT76_LED_OFF);
 }
 
+static int g_trace;
+
+void link_set_trace(int on) { g_trace = on; }
+
 void link_init(dlink *l, mt76 *m, mt76_radio *r)
 {
     memset(l, 0, sizeof *l);
@@ -115,6 +122,8 @@ void link_set_pairing(dlink *l, int on, const char *why)
         !mt76_radio_set_pairing(l->m, l->r, on)) {
         log_line("  adapter: could not %s pairing (error %d)",
                  on ? "open" : "close", l->m->err);
+        /* The timeout would otherwise retry the close on every pass. */
+        if (!on) l->pairing_until = time(NULL) + PAIRING_RETRY_SECONDS;
         return;
     }
     l->pairing = on;
@@ -411,7 +420,8 @@ static void client_input(dlink *l, int wcid, const pad_state *st)
     }
     if (c->pad >= 0) pads_update(c->pad, st);
 
-    if (st->buttons != c->last_buttons && c->changes_logged < CHANGES_LOGGED) {
+    if (g_trace && st->buttons != c->last_buttons &&
+        c->changes_logged < CHANGES_LOGGED) {
         c->changes_logged++;
         log_line("    client %d input: buttons %04X  LT %4u RT %4u  "
                  "L %6d,%6d  R %6d,%6d", wcid, (unsigned)st->buttons,
@@ -462,7 +472,7 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
         c->rssi_n++;
     }
 
-    if (c->dumped < DUMP_PER_CLIENT) {
+    if (g_trace && c->dumped < DUMP_PER_CLIENT) {
         c->dumped++;
         snprintf(what, sizeof what, "client %d GIP", wcid);
         hex(what, p, len);
