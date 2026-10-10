@@ -61,6 +61,9 @@
 /* How often to summarise progress into the log. */
 #define REPORT_SECONDS 60
 
+/* How often to look for a controller while none is connected. */
+#define WAIT_SECONDS 3
+
 /* The user the virtual pad belongs to. */
 #define VPAD_USER 1
 
@@ -97,9 +100,13 @@ typedef struct {
     int  reinits, rebuilds;
 } stats;
 
+/* Why run() returned: the quit combination ends the payload, anything else
+ * sends it back to waiting for a controller. */
+typedef enum { RUN_QUIT, RUN_GONE } run_end;
+
 /* Returns when the controller is unplugged, the quit combination is held, or
  * the connection cannot be recovered. */
-static void run(gip_device *dev, vpad *pad, stats *st)
+static run_end run(gip_device *dev, vpad *pad, stats *st)
 {
     unsigned char report[VPAD_REPORT_SIZE];
     time_t last_input, last_reinit, last_keepalive, last_note;
@@ -158,7 +165,7 @@ static void run(gip_device *dev, vpad *pad, stats *st)
 
         if (quit_since != 0 && now - quit_since >= QUIT_HOLD_SECONDS) {
             log_line("  View+Menu held -- stopping");
-            return;
+            return RUN_QUIT;
         }
 
         if (now != last_beat) {
@@ -183,7 +190,7 @@ static void run(gip_device *dev, vpad *pad, stats *st)
                 log_line("  re-initialising is not helping -- rebuilding USB");
                 if (!gip_rebuild(dev)) {
                     log_line("  rebuild failed -- giving up");
-                    return;
+                    return RUN_GONE;
                 }
             }
         }
@@ -191,7 +198,7 @@ static void run(gip_device *dev, vpad *pad, stats *st)
         if (now - last_input >= UNPLUG_SECONDS) {
             log_line("  no input for %d seconds -- controller gone",
                      UNPLUG_SECONDS);
-            return;
+            return RUN_GONE;
         }
 
         if (now - last_note >= REPORT_SECONDS) {
@@ -210,7 +217,7 @@ int main(void)
     gip_device *dev = NULL;
     vpad *pad = NULL;
     stats st;
-    int rc = 1;
+    int rc = 1, waiting = 0;
 
     memset(&st, 0, sizeof st);
 
@@ -226,37 +233,56 @@ int main(void)
         return 1;
     }
 
-    dev = gip_open(why, (int)sizeof why);
-    if (!dev) {
-        log_line("  %s", why);
-        notify("FGG-XSense: %s", why);
-        goto done;
+    notify("FGG-XSense: waiting for an Xbox controller");
+
+    /* Resident: wait for a controller, serve it until it is unplugged, and
+     * wait again -- so the payload can be autoloaded before one is connected.
+     * Only the quit combination ends it. */
+    for (;;) {
+        run_end end;
+
+        dev = gip_open(why, (int)sizeof why);
+        if (!dev) {
+            if (!waiting) log_line("  %s -- waiting", why);
+            waiting = 1;
+            lock_refresh();
+            sleep(WAIT_SECONDS);
+            continue;
+        }
+        waiting = 0;
+        log_line("  controller %s  %04X:%04X  %s",
+                 gip_node(dev), gip_vendor(dev), gip_product(dev), why);
+
+        pad = vpad_open(VPAD_USER, why, (int)sizeof why);
+        if (!pad) {
+            log_line("  could not register a virtual pad -- %s", why);
+            notify("FGG-XSense: could not register a virtual pad");
+            goto done;
+        }
+        log_line("  virtual pad registered, %s", why);
+
+        notify("FGG-XSense: controller ready - hold View+Menu to stop");
+        log_line("  running -- unplug the controller or hold View+Menu to stop");
+
+        memset(&st, 0, sizeof st);
+        end = run(dev, pad, &st);
+
+        log_line("  total: %ld read, %ld delivered, %ld failed, %ld acked, "
+                 "%d reinit(s), %d rebuild(s)",
+                 st.reports, st.delivered, st.failed, st.acked,
+                 st.reinits, st.rebuilds);
+
+        vpad_close(pad);
+        pad = NULL;
+        gip_close(dev);
+        dev = NULL;
+
+        if (end == RUN_QUIT) {
+            notify("FGG-XSense: stopped");
+            break;
+        }
+        notify("FGG-XSense: controller disconnected - waiting");
     }
-    log_line("  controller %s  %04X:%04X  %s",
-             gip_node(dev), gip_vendor(dev), gip_product(dev), why);
-
-    pad = vpad_open(VPAD_USER, why, (int)sizeof why);
-    if (!pad) {
-        log_line("  could not register a virtual pad -- %s", why);
-        notify("FGG-XSense: could not register a virtual pad");
-        goto done;
-    }
-    log_line("  virtual pad registered, %s", why);
-
-    notify("FGG-XSense: controller ready - hold View+Menu to stop");
-    log_line("  running -- unplug the controller or hold View+Menu to stop");
-
-    run(dev, pad, &st);
-
-    log_line("  total: %ld read, %ld delivered, %ld failed, %ld acked, "
-             "%d reinit(s), %d rebuild(s)",
-             st.reports, st.delivered, st.failed, st.acked,
-             st.reinits, st.rebuilds);
-
-    if (st.delivered > 0)
-        notify("FGG-XSense: stopped - %ld inputs delivered", st.delivered);
-    else
-        notify("FGG-XSense: no input delivered - see the log");
 
     rc = 0;
 
