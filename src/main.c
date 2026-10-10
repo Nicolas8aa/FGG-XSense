@@ -165,8 +165,8 @@ int main(void)
 
     /* Sony's pad library gives the Xbox button the PS button's job and binds
      * pads to the user; without it, pads are published directly as before.
-     * ps_button=0 in the config keeps to the direct route. */
-    if (config_int("ps_button", 1) && !vpad_sce_init())
+     * Experimental: on only with ps_button=1 in the config. */
+    if (config_int("ps_button", 0) && !vpad_sce_init())
         log_line("  vpad: Sony's pad library unavailable -- no PS button");
 
     notify("FGG-XSense: waiting for an Xbox controller");

@@ -20,4 +20,6 @@ int vpad_sce_insert(int32_t handle, const pad_state *state)
 
 void vpad_sce_delete(int32_t handle) { (void)handle; }
 
+int vpad_sce_ready(void) { return 0; }
+
 void log_line(const char *fmt, ...) { (void)fmt; }

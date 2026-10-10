@@ -78,6 +78,15 @@ _Static_assert(offsetof(ScePadData, timestamp) == 80, "timestamp offset");
 /* How long to wait for the kernel log to name the new device. */
 #define IDENTIFY_MS 3000
 
+/* AddDevice answers this while the console's "who is using this controller"
+ * screen is waiting for an account to be chosen -- a screen the call itself
+ * brings up. It is retried, as YetAnotherControllerEnabler does, until the
+ * choice is made; giving up and making a pad some other way meanwhile left
+ * the console's controller handling stuck until a restart. */
+#define ADD_PENDING      0x803B0006
+#define ADD_RETRY_MS     2000
+#define ADD_PENDING_MAX  60000
+
 /* ---- system interfaces, all resolved at runtime ------------------------- */
 
 typedef int32_t (*fn_void)(void);
@@ -353,6 +362,30 @@ int32_t vpad_sce_add(char *why, int whylen)
     param[0] = (int32_t)sizeof param;
     param[1] = 1;
     r = p_add(param, VIRTUAL_DEVICE_DUALSENSE);
+    log_line("  vpad: AddDevice %#x, block %08x %08x %08x %08x %08x %08x", (unsigned)r,
+             (unsigned)param[2], (unsigned)param[3], (unsigned)param[4],
+             (unsigned)param[5], (unsigned)param[6], (unsigned)param[7]);
+    if (r == (int32_t)ADD_PENDING) {
+        long since = now_ms();
+        notify("FGG-XSense: choose who is using the new controller");
+        while (r == (int32_t)ADD_PENDING && now_ms() - since < ADD_PENDING_MAX) {
+            long t = now_ms();
+            uint64_t d = 0;
+            while (now_ms() - t < ADD_RETRY_MS) {
+                /* The device may already be named while the choice is
+                 * pending; keep everything the log says. */
+                int n = read_log(fd, line, &len, sizeof line, &d, 1);
+                if (n > 0 && !found) {
+                    dev = d;
+                    found = n;
+                }
+                usleep(50000);
+            }
+            r = p_add(param, VIRTUAL_DEVICE_DUALSENSE);
+            log_line("  vpad: AddDevice again after %ld ms: %#x", now_ms() - since,
+                     (unsigned)r);
+        }
+    }
     if (r != 0) {
         snprintf(why, (size_t)whylen, "AddDevice %#x", (unsigned)r);
         close(fd);
@@ -405,6 +438,8 @@ out:
 
 static uint8_t axis(int16_t v)     { return (uint8_t)(((int)v + 32768) >> 8); }
 static uint8_t axis_inv(int16_t v) { return (uint8_t)((32767 - (int)v) >> 8); }
+
+int vpad_sce_ready(void) { return g_ready; }
 
 int vpad_sce_insert(int32_t handle, const pad_state *s)
 {

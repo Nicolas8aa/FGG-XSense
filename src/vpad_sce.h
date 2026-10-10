@@ -25,8 +25,13 @@ int vpad_sce_init(void);
 /* Puts the original credentials back. */
 void vpad_sce_shutdown(void);
 
+/* Whether this route is in use. While it is, no pad is made any other way:
+ * a second pad made while this route's is pending wedges the console. */
+int vpad_sce_ready(void);
+
 /* Creates a virtual DualSense bound to the signed-in user. Returns its
- * handle, or -1 on failure with a reason in `why`. Blocks for up to about
+ * handle, or -1 on failure with a reason in `why`. Blocks while the console
+ * asks who is using the controller (up to a minute), then for up to about
  * three seconds while the device is identified. */
 int32_t vpad_sce_add(char *why, int whylen);
 

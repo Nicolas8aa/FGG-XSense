@@ -114,9 +114,11 @@ vpad *vpad_open(uint32_t user, char *why, int whylen)
             snprintf(why, (size_t)whylen, "through Sony's pad library, %s", sce_why);
             return pad;
         }
-        if (strcmp(sce_why, "Sony's pad library not in use") != 0)
-            log_line("  vpad: Sony's pad library could not add a pad (%s) -- direct "
-                     "route instead", sce_why);
+        if (vpad_sce_ready()) {
+            /* Never a second pad the direct way while this route is in use. */
+            snprintf(why, (size_t)whylen, "Sony's pad library: %s", sce_why);
+            return NULL;
+        }
     }
 
     pad->fd = open("/dev/hid", O_RDWR);
