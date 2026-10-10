@@ -428,6 +428,10 @@ static void client_battery(dlink *l, int wcid, const unsigned char *msg, int n)
     if (!gip_decode_battery(msg, n, &level, &type) ||
         (level == c->battery_level && type == c->battery_type))
         return;
+    /* Once, as the batteries become low -- not on every report after. */
+    if (gip_battery_is_low(level, type) &&
+        !gip_battery_is_low(c->battery_level, c->battery_type))
+        notify("FGG-XSense: Xbox controller battery low");
     c->battery_level = level;
     c->battery_type = type;
     log_line("  adapter: client %d battery %s (%s)", wcid,

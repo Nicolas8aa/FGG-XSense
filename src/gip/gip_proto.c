@@ -91,6 +91,11 @@ const char *gip_battery_type_name(int type)
     return type >= 0 && type < 4 ? names[type] : "unknown power source";
 }
 
+int gip_battery_is_low(int level, int type)
+{
+    return level == 0 && (type == 1 || type == 2);
+}
+
 int gip_decode_input(const unsigned char *msg, int n, pad_state *out)
 {
     const unsigned char *d = msg + GIP_HEADER_SIZE;

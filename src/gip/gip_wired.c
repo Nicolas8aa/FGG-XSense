@@ -189,6 +189,10 @@ static void report_battery(wired *w, const unsigned char *msg, int n)
     if (!gip_decode_battery(msg, n, &level, &type) ||
         (level == w->battery_level && type == w->battery_type))
         return;
+    /* Once, as the batteries become low -- not on every report after. */
+    if (gip_battery_is_low(level, type) &&
+        !gip_battery_is_low(w->battery_level, w->battery_type))
+        notify("FGG-XSense: Xbox controller battery low");
     w->battery_level = level;
     w->battery_type = type;
     log_line("  %s: battery %s (%s)", w->node, gip_battery_level_name(level),
