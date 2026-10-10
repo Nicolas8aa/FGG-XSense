@@ -22,6 +22,9 @@
  * before then can see a false success (xone commit 525a27e). */
 #define START_SETTLE_US 500000
 
+/* Each poll lasts up to 0.75 s; together about 3 s for a reset to finish. */
+#define RESET_WAIT_POLLS 4
+
 #define CFG(r) ((uint32_t)(r) | MT_VEND_TYPE_CFG)
 
 static mt76_boot_result fail(mt76 *m, const char *what)
@@ -81,15 +84,24 @@ static mt76_boot_result warm(mt76 *m, const mt76_fw *fw)
 {
     mt76_boot_result r;
     uint32_t last = 0;
+    int i;
 
     if (!rf_patch(m)) return fail(m, "RF patch");
     if (!mt76_dev_mode(m, DEV_MODE_RESET)) return fail(m, "firmware reset");
 
-    /* xow only waits for the register to stop reading 0x80000000; logging
-     * what it settles at tells whether the reset really cleared it. */
-    mt76_poll(m, CFG(MT_FCE_DMA_ADDR), 0xFFFFFFFF, 0, &last);
-    if (mt76_gone(m)) return fail(m, "firmware reset");
+    /* While the reset is in progress the register reads 0x80000000; xow
+     * waits for it to read anything else. Uploading before then can be
+     * refused outright, so allow it a few seconds. */
+    for (i = 0; i < RESET_WAIT_POLLS; i++) {
+        mt76_poll(m, CFG(MT_FCE_DMA_ADDR), 0x80000000, 0, &last);
+        if (mt76_gone(m)) return fail(m, "firmware reset");
+        if (!(last & 0x80000000)) break;
+    }
     log_line("  adapter: after reset FCE_DMA_ADDR %08X", (unsigned)last);
+    if (last & 0x80000000) {
+        log_line("  adapter: firmware reset did not finish");
+        return MT76_BOOT_FAILED;
+    }
 
     r = cold(m, fw);
     return r == MT76_BOOT_COLD ? MT76_BOOT_WARM : r;

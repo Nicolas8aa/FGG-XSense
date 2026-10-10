@@ -16,6 +16,9 @@
 
 #define MS_VENDOR 0x045E
 
+/* Attempts at starting the firmware before giving up until a replug. */
+#define BOOT_ATTEMPTS 3
+
 /* How often to check that the adapter is still there once running. */
 #define WATCH_SECONDS 5
 
@@ -175,8 +178,15 @@ void *dongle_run(void *arg)
         }
     }
 
-    r = mt76_boot(&m, &fw);
-    log_line("  adapter %s: %s", node, mt76_boot_name(r));
+    /* A start that fails is retried: each attempt begins with a reset. */
+    for (i = 1; i <= BOOT_ATTEMPTS; i++) {
+        r = mt76_boot(&m, &fw);
+        log_line("  adapter %s: %s", node, mt76_boot_name(r));
+        if (r != MT76_BOOT_FAILED || i == BOOT_ATTEMPTS) break;
+        log_line("  adapter %s: retrying (attempt %d of %d)", node, i + 1,
+                 BOOT_ATTEMPTS);
+        usleep(500000);
+    }
 
     if (r == MT76_BOOT_GONE) {
         /* Expected on some adapters: it re-enumerates, possibly on another
@@ -185,7 +195,7 @@ void *dongle_run(void *arg)
         goto done;
     }
     if (r == MT76_BOOT_FAILED) {
-        notify("FGG-XSense: adapter firmware did not start - see the log");
+        notify("FGG-XSense: adapter did not start - unplug and replug it");
         watch(&m, node);
         goto done;
     }
