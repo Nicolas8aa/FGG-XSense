@@ -15,7 +15,8 @@ endif
 ELF   := fgg-xsense.elf
 BUILD := build
 
-CFLAGS := -std=c11 -Wall -Wextra -Werror -O2 -Isrc
+CFLAGS := -std=c11 -Wall -Wextra -Werror -O2 -Isrc \
+          -Ithird_party/xone -Ithird_party/compat
 
 # No libScePad: the host process has not loaded it, so calls into the module
 # fault. The ioctls it wraps are issued directly instead.
@@ -24,7 +25,7 @@ SRCS := src/main.c src/pads.c src/vpad.c src/lock.c src/config.c src/log.c \
         src/gip/gip_proto.c src/gip/gip_wired.c \
         src/usb/ugen.c src/usb/usb_enum.c src/sha256.c \
         src/dongle/dongle.c src/dongle/mt76_fw.c \
-        src/dongle/mt76.c src/dongle/mt76_boot.c
+        src/dongle/mt76.c src/dongle/mt76_boot.c src/dongle/mt76_radio.c
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS))
 
 .PHONY: all clean test probe check
@@ -56,6 +57,7 @@ HOST_TESTS := tests/test_core.c src/gip/gip_proto.c src/vpad.c src/sha256.c \
 check:
 	@mkdir -p $(BUILD)/host
 	$(HOSTCC) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -Isrc -Itests \
+		-Ithird_party/xone -Ithird_party/compat \
 		-o $(BUILD)/host/test_core $(HOST_TESTS)
 	$(BUILD)/host/test_core
 

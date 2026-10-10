@@ -22,7 +22,7 @@
  * before then can see a false success (xone commit 525a27e). */
 #define START_SETTLE_US 500000
 
-#define CFG(r) ((r) | MT_VEND_TYPE_CFG)
+#define CFG(r) ((uint32_t)(r) | MT_VEND_TYPE_CFG)
 
 static mt76_boot_result fail(mt76 *m, const char *what)
 {

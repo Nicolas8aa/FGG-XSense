@@ -8,20 +8,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#define MT_VEND_DEV_MODE    0x01
-#define MT_VEND_MULTI_WRITE 0x06
-#define MT_VEND_MULTI_READ  0x07
-#define MT_VEND_WRITE_CFG   0x46
-#define MT_VEND_READ_CFG    0x47
-
 #define REQ_VENDOR_IN  0xC0
 #define REQ_VENDOR_OUT 0x40
-
-/* Command header (xone mt76_defs.h MT_MCU_MSG_*). */
-#define MT_MCU_MSG_TYPE_CMD (1u << 30)
-#define MT_MCU_MSG_PORT(p)  (((uint32_t)(p) & 0x7) << 27)
-#define MT_MCU_MSG_CMD(c)   (((uint32_t)(c) & 0x7F) << 20)
-#define MT_CPU_TX_PORT      2
 
 #define BULK_TIMEOUT_MS 1000
 #define POLL_RETRIES    50
@@ -124,8 +112,10 @@ int mt76_send_command(mt76 *m, unsigned cmd, const void *payload, unsigned len)
     total = 4 + padded + 4;
 
     buf = ugen_slot_buf(m->u, MT76_SLOT_CMD);
-    put_le32(buf, MT_MCU_MSG_TYPE_CMD | MT_MCU_MSG_PORT(MT_CPU_TX_PORT) |
-                  MT_MCU_MSG_CMD(cmd) | padded);
+    put_le32(buf, MT_MCU_MSG_TYPE_CMD |
+                  FIELD_PREP(MT_MCU_MSG_PORT, MT_CPU_TX_PORT) |
+                  FIELD_PREP(MT_MCU_MSG_CMD_TYPE, cmd) |
+                  FIELD_PREP(MT_MCU_MSG_LEN, padded));
     memcpy(buf + 4, payload, len);
     memset(buf + 4 + len, 0, total - 4 - len);
 
@@ -141,6 +131,64 @@ int mt76_send_command(mt76 *m, unsigned cmd, const void *payload, unsigned len)
         m->err = EIO;
         if (m->trace) log_line("    command %u: status %d", cmd, c.status);
         return 0;
+    }
+    return 1;
+}
+
+int mt76_send_ms_command(mt76 *m, uint32_t cmd, const void *data, unsigned len)
+{
+    unsigned char buf[4 + 64];
+
+    if (len > sizeof buf - 4) {
+        m->err = EINVAL;
+        return 0;
+    }
+    put_le32(buf, cmd);
+    memcpy(buf + 4, data, len);
+    return mt76_send_command(m, MT_CMD_INIT_GAIN_OP, buf, 4 + len);
+}
+
+int mt76_write_burst(mt76 *m, uint32_t idx, const void *data, unsigned len)
+{
+    unsigned char buf[4 + 128];
+
+    if (len > sizeof buf - 4) {
+        m->err = EINVAL;
+        return 0;
+    }
+    /* The register offset is given in the chip's WLAN memory map. */
+    put_le32(buf, idx + MT_MCU_MEMMAP_WLAN);
+    memcpy(buf + 4, data, len);
+    if (m->trace) log_line("    burst %04X, %u bytes", (unsigned)idx, len);
+    return mt76_send_command(m, MT_CMD_BURST_WRITE, buf, 4 + len);
+}
+
+int mt76_read_efuse(mt76 *m, uint16_t addr, void *data, int len)
+{
+    unsigned char *out = data;
+    uint32_t ctrl, val;
+    int i;
+
+    /* Kick a read of the 16-byte block holding `addr`, wait for the kick
+     * bit to clear, then read the block's words (xone_mt76_read_efuse). */
+    if (!mt76_rr(m, MT_EFUSE_CTRL, &ctrl)) return 0;
+    ctrl &= ~(MT_EFUSE_CTRL_AIN | MT_EFUSE_CTRL_MODE);
+    ctrl |= MT_EFUSE_CTRL_KICK;
+    ctrl |= FIELD_PREP(MT_EFUSE_CTRL_AIN, addr & ~0x0fu);
+    ctrl |= FIELD_PREP(MT_EFUSE_CTRL_MODE, MT_EE_READ);
+    if (!mt76_wr(m, MT_EFUSE_CTRL, ctrl)) return 0;
+
+    if (!mt76_poll(m, MT_EFUSE_CTRL, MT_EFUSE_CTRL_KICK, 0, NULL)) {
+        if (!m->err) m->err = ETIMEDOUT;
+        return 0;
+    }
+
+    for (i = 0; i < len; i += 4) {
+        uint32_t offset = (addr & GENMASK(3, 2)) + (uint32_t)i;
+        int n = len - i < 4 ? len - i : 4;
+
+        if (!mt76_rr(m, MT_EFUSE_DATA_BASE + offset, &val)) return 0;
+        memcpy(out + i, &val, (size_t)n);
     }
     return 1;
 }

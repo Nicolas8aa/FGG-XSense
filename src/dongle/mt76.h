@@ -3,41 +3,42 @@
  * Registers are read and written with vendor control requests; commands for
  * the chip's microcontroller, firmware included, go out on bulk endpoint 04
  * behind a four-byte header. Ported from medusalix/xow and dlundqvist/xone
- * (both GPL-2.0-or-later); register numbers from OpenWrt mt76 (ISC).
+ * (both GPL-2.0-or-later); register numbers come from xone's mt76_defs.h,
+ * vendored unchanged in third_party/xone.
  */
 #ifndef FGG_MT76_H
 #define FGG_MT76_H
 
 #include "usb/ugen.h"
 
+#include "mt76_defs.h"
+
 #include <stdint.h>
 
-/* Set in a register address to reach the chip's configuration space, which
- * uses the CFG pair of vendor requests instead of the MULTI pair. */
-#define MT_VEND_TYPE_CFG 0x40000000u
+/* The RF patch register (xone XONE_MT_RF_PATCH). */
+#define MT_RF_PATCH 0x0130
 
-/* Registers used so far. */
-#define MT_RF_PATCH                     0x0130
-#define MT_FCE_DMA_ADDR                 0x0230
-#define MT_FCE_DMA_LEN                  0x0234
-#define MT_FCE_PSE_CTRL                 0x0800
-#define MT_TX_CPU_FROM_FCE_BASE_PTR     0x09a0
-#define MT_TX_CPU_FROM_FCE_MAX_COUNT    0x09a4
-#define MT_TX_CPU_FROM_FCE_CPU_DESC_IDX 0x09a8
-#define MT_FCE_PDMA_GLOBAL_CONF         0x09c4
-#define MT_FCE_SKIP_FS                  0x0a6c
-#define MT_USB_U3DMA_CFG                0x9018
-#define MT_USB_DMA_CFG_RX_BULK_EN       (1u << 22)
-#define MT_USB_DMA_CFG_TX_BULK_EN       (1u << 23)
+/* Endpoints: commands and firmware out, microcontroller events and radio
+ * frames in. */
+#define MT76_EP_OUT     0x04
+#define MT76_EP_IN_CMD  0x85
+#define MT76_EP_IN_WLAN 0x84
 
-/* The bulk OUT endpoint for commands and firmware, and the slot it uses. */
-#define MT76_EP_OUT    0x04
+/* The command slot. */
 #define MT76_SLOT_CMD  0
 
 /* Largest command payload: a firmware chunk. The slot carries it plus the
  * header, up to three bytes of padding and the four-byte trailer. */
 #define MT76_CMD_MAX   0x3800
 #define MT76_CMD_SLOT_SIZE (4 + MT76_CMD_MAX + 4 + 4)
+
+/* Commands understood by Microsoft's firmware, sent as MT_CMD_INIT_GAIN_OP
+ * (xone enum xone_mt76_ms_command). */
+#define MT76_MS_SET_MAC_ADDRESS     0x00
+#define MT76_MS_ADD_CLIENT          0x01
+#define MT76_MS_REMOVE_CLIENT       0x02
+#define MT76_MS_SET_IDLE_TIME       0x05
+#define MT76_MS_SET_CHAN_CANDIDATES 0x07
 
 typedef struct {
     ugen *u;
@@ -59,6 +60,16 @@ int mt76_dev_mode(mt76 *m, unsigned mode);
 
 /* Sends a command to the chip's microcontroller and waits for the write. */
 int mt76_send_command(mt76 *m, unsigned cmd, const void *payload, unsigned len);
+
+/* A command for Microsoft's firmware: the command word, then `data`. */
+int mt76_send_ms_command(mt76 *m, uint32_t cmd, const void *data, unsigned len);
+
+/* Writes `len` bytes into the chip's memory at register offset `idx`. */
+int mt76_write_burst(mt76 *m, uint32_t idx, const void *data, unsigned len);
+
+/* Reads `len` bytes of the chip's EFUSE (its factory configuration) from
+ * `addr`. */
+int mt76_read_efuse(mt76 *m, uint16_t addr, void *data, int len);
 
 /* Whether the last failure means the device has left the bus, as it does
  * briefly once its firmware starts. */
