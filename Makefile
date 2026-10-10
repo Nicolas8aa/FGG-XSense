@@ -21,7 +21,7 @@ CFLAGS := -std=c11 -Wall -Wextra -Werror -O2 -Isrc \
 # No libScePad: the host process has not loaded it, so calls into the module
 # fault. The ioctls it wraps are issued directly instead.
 
-SRCS := src/main.c src/pads.c src/vpad.c src/vpad_sce.c src/lock.c src/config.c src/log.c \
+SRCS := src/main.c src/pads.c src/vpad.c src/vpad_sce.c src/shell_call.c src/lock.c src/config.c src/log.c \
         src/gip/gip_proto.c src/gip/gip_wired.c \
         src/usb/ugen.c src/usb/usb_enum.c src/sha256.c \
         src/dongle/dongle.c src/dongle/mt76_fw.c \

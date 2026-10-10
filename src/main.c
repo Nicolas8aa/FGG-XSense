@@ -18,7 +18,8 @@
  * again, so it can be autoloaded before one is plugged in. Holding View+Menu
  * on any controller stops it, as does creating /data/fgg-xsense/stop.
  *
- * The PS button cannot be sent through a virtual pad -- see the README.
+ * The ordinary virtual-pad route cannot send PS.  An opt-in experimental
+ * libScePad route is available; see the README before enabling it.
  */
 #include "config.h"
 #include "dongle/dongle.h"

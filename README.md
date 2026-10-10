@@ -116,31 +116,30 @@ If the adapter ever stops responding — the log says the firmware did not start
 | View | Touchpad click |
 | D-pad | D-pad |
 | Left / right stick | Left / right stick |
-| **Guide (Xbox button)** | **nothing — see below** |
+| **Guide (Xbox button)** | **PS button — experimental; see below** |
 
 Sticks are full 16-bit range. The Y axes are inverted on the way through,
 because GIP counts up as positive and PlayStation counts down.
 
 ## The PS button
 
-**It is not mapped, and it cannot be.** Use your DualSense for it.
+The normal kernel virtual-pad API cannot synthesise it: the PS button is
+intercepted above that layer. An **experimental** route instead creates a
+DualSense through Sony's `libScePad` and translates the Xbox Guide bit into its
+PS bit.
 
-The PS button is intercepted by the system above the pad layer, specifically so
-that no controller — real or virtual — can synthesise a home-button press. It
-appears in neither the published button constants nor anywhere inside
-`libScePad`.
+Enable it only for this test by adding this to `/data/fgg-xsense/config.txt`:
 
-This was not assumed. The virtual pad report was eliminated exhaustively on
-hardware:
+```ini
+ps_button=1
+```
 
-- all **16** undocumented bits of the button word, including `0x80000000`,
-  which the PS4 headers name `SCE_PAD_BUTTON_INTERCEPTED`
-- all **17** report bytes that `libScePad` never writes
-
-Each was held for a second and a half with a controller in hand. None produced
-any reaction whatsoever. The button is still read and acknowledged — the
-controller stops talking to a host that ignores it — it simply has nowhere to
-go.
+When the console asks who is using the newly created controller, FGG-XSense
+asks SceShellUI itself to press that controller's PS button, then leaves account
+selection to you. Choose your account with the Xbox controller. This uses a
+short-lived ptrace call into SceShellUI and is therefore intentionally opt-in.
+If the assignment screen does not appear or controller input remains busy, stop
+the payload, remove `ps_button=1`, and use the DualSense for PS instead.
 
 ---
 
@@ -250,7 +249,8 @@ make probe    # probe.elf: a read-only survey of the console's USB devices
 
 Settings, all optional, go in `/data/fgg-xsense/config.txt` as `key=value`:
 `mirror=1` publishes every controller twice (for testing several pads),
-`trace_mt76=1` logs every register access to the wireless adapter.
+`trace_mt76=1` logs every register access to the wireless adapter, and
+`ps_button=1` enables the experimental Xbox Guide-to-PS route described above.
 
 ## Troubleshooting
 

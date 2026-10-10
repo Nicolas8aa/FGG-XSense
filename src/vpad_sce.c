@@ -4,6 +4,7 @@
 #include "vpad_sce.h"
 #include "log.h"
 #include "vpad.h"
+#include "shell_call.h"
 
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -111,9 +112,10 @@ int32_t  kernel_set_ucred_authid(pid_t pid, uint64_t authid);
 int32_t  kernel_get_ucred_caps(pid_t pid, uint8_t caps[16]);
 int32_t  kernel_set_ucred_caps(pid_t pid, const uint8_t caps[16]);
 
-/* The credentials MBus and libScePad's virtual devices accept: a system
- * service's (PadBridge). */
-#define SYSTEM_AUTHID 0x3800000000010003ull
+/* The credentials libScePad's virtual devices accept from a payload: those
+ * YetAnotherControllerEnabler uses (PadBridge's 0x3800000000010003 also
+ * creates the device on 13.60, but its MBus bind is refused). */
+#define SYSTEM_AUTHID 0x4800000000010003ull
 
 static uint64_t g_orig_authid;
 static uint8_t  g_orig_caps[16];
@@ -410,13 +412,56 @@ int32_t vpad_sce_add(char *why, int whylen)
     handle = (int32_t)(dev & 0xFFFFFFFFu);
     r = p_bind(dev, user);
     if (r != 0) {
+        /* Refused from a payload on 13.60 (0x809b0005). The shell may bind:
+         * YetAnotherControllerEnabler runs the same call inside SceShellUI,
+         * or SceShellCore if that cannot be reached. */
+        static const char *const shells[] = { "SceShellUI", "SceShellCore" };
+        int64_t res = -1;
+        int k, c = -1;
+
+        for (k = 0; k < 2; k++) {
+            c = shell_call(shells[k], "libSceMbus", "sceMbusBindDeviceWithUserId",
+                           dev, (uint64_t)(uint32_t)user, &res);
+            log_line("  vpad: bind from %s -> %s %#llx", shells[k],
+                     c == 0 ? "returned" : "could not call, code", c == 0 ?
+                     (unsigned long long)(uint32_t)res : (unsigned long long)(unsigned)c);
+            if (c == 0) break;
+        }
+        if (c == 0 && res == 0) r = 0;
+    }
+    if (r != 0) {
+        ScePadData ps;
+        struct timespec ts;
+        int press;
+
+        /* The new pad is already visible to the account-assignment screen,
+         * but that screen ignores InsertData from this payload while it is
+         * busy.  Its own SceShellUI accepts the pad's PS report; this is the
+         * final assignment nudge used by YetAnotherControllerEnabler.  Do not
+         * synthesize Cross: the user must select the account deliberately. */
+        memset(&ps, 0, sizeof ps);
+        ps.buttons = SCE_PS;
+        ps.orientation[3] = 1.0f;
+        ps.acceleration[1] = -1.0f;
+        ps.connected = 1;
+        ps.connectedCount = 1;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        ps.timestamp = (uint64_t)ts.tv_sec * 1000000u +
+                       (uint64_t)ts.tv_nsec / 1000u;
+        press = shellui_press_ps(handle, &ps, sizeof ps);
+        if (press == 0)
+            log_line("  vpad: PS press from SceShellUI -> delivered");
+        else
+            log_line("  vpad: PS press from SceShellUI -> could not deliver (code %d)",
+                     press);
+
         /* Refused (0x809b0005 has been seen, perhaps because the user
          * already has a controller). The device is kept: the console's own
-         * "who is using this controller" screen, up since AddDevice, assigns
-         * it once someone chooses with the pad itself. */
-        snprintf(why, (size_t)whylen, "device %#llx, binding to user %#x refused (%#x) -- "
-                 "choose the user on screen", (unsigned long long)dev, (unsigned)user,
-                 (unsigned)r);
+         * account list now accepts this new pad.  The user chooses the
+         * account with it; no account-selection button is injected. */
+        snprintf(why, (size_t)whylen, "device %#llx, binding to user %#x refused (%#x); "
+                 "ShellUI PS %s -- choose the user on screen", (unsigned long long)dev,
+                 (unsigned)user, (unsigned)r, press == 0 ? "delivered" : "failed");
         goto out;
     }
     snprintf(why, (size_t)whylen, "device %#llx bound to user %#x",
