@@ -2,7 +2,9 @@
  * Follows dlundqvist/xone transport/dongle.c (message, frame, pairing and
  * client handling), (c) Severin von Wnuck-Lipinski, GPL-2.0-or-later. */
 #include "dongle/link.h"
+#include "gip/gip_proto.h"
 #include "log.h"
+#include "pads.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +22,19 @@
 
 /* GIP messages logged in full per controller while the link is new. */
 #define DUMP_PER_CLIENT 16
+
+/* Button changes logged per controller, to check every input arrives. */
+#define CHANGES_LOGGED 200
+
+/* An announce repeats until the controller is answered; answer at most this
+ * often so a burst of announces is not met with a burst of start-ups. */
+#define INIT_INTERVAL_SECONDS 1
+
+/* Data frames to a client go on the data queue (xone XONE_DONGLE_QUEUE_DATA). */
+#define QUEUE_DATA 0x00
+
+/* 802.11 frame control for data sent from the access point. */
+#define FC_QOS_DATA_FROMDS 0x0288
 
 #define REPORT_SECONDS 60
 
@@ -123,6 +138,7 @@ static void associate(dlink *l, const uint8_t *addr)
 
     memset(&l->clients[wcid - 1], 0, sizeof l->clients[0]);
     l->clients[wcid - 1].used = 1;
+    l->clients[wcid - 1].pad = -1;
     memcpy(l->clients[wcid - 1].addr, addr, 6);
     l->nclients++;
     led(l);
@@ -142,9 +158,12 @@ static void remove_client(dlink *l, int wcid, const char *why)
     if (!c->used) return;
 
     log_line("  adapter: client %d (%02x:%02x:%02x:%02x:%02x:%02x) gone: %s, "
-             "after %ld frame(s)", wcid, c->addr[0], c->addr[1], c->addr[2],
-             c->addr[3], c->addr[4], c->addr[5], why, c->frames);
+             "after %ld frame(s), %ld input report(s), %ld acknowledged, %ld "
+             "send failure(s)", wcid, c->addr[0], c->addr[1], c->addr[2],
+             c->addr[3], c->addr[4], c->addr[5], why, c->frames, c->inputs,
+             c->acked, c->sent_failed);
 
+    if (c->pad >= 0) pads_detach(c->pad);
     mt76_radio_remove_client(l->m, wcid);
     memset(c, 0, sizeof *c);
     l->nclients--;
@@ -165,7 +184,90 @@ static void pair(dlink *l, const uint8_t *addr)
 
 /* ---- frames ------------------------------------------------------------ */
 
-static void client_data(dlink *l, int wcid, const unsigned char *gip, uint32_t len)
+/* Sends one GIP message to a client: an 8-byte queue header, a TXWI asking
+ * for acknowledgement, a QoS data header from us, two bytes of padding, then
+ * the message (xone xone_dongle_prep_packet). */
+static int send_gip(dlink *l, int wcid, const unsigned char *gip, int len)
+{
+    unsigned char b[8 + 20 + 26 + 2 + 64];
+    unsigned char *txwi = b + 8, *h = b + 28;
+    link_client *c = &l->clients[wcid - 1];
+    uint32_t w;
+
+    if (len < 0 || len > 64) return 0;
+    memset(b, 0, sizeof b);
+
+    b[2] = QUEUE_DATA;
+    b[3] = (unsigned char)(wcid - 1);
+
+    w = FIELD_PREP(MT_TXWI_FLAGS_MPDU_DENSITY, 5) |              /* 4 us */
+        (FIELD_PREP(MT_RXWI_RATE_PHY, MT_PHY_TYPE_OFDM) << 16);
+    txwi[0] = (unsigned char)w;
+    txwi[1] = (unsigned char)(w >> 8);
+    txwi[2] = (unsigned char)(w >> 16);
+    txwi[3] = (unsigned char)(w >> 24);
+    txwi[4] = MT_TXWI_ACK_CTL_REQ;
+    txwi[5] = (unsigned char)(wcid - 1);
+    txwi[6] = (unsigned char)(26 + len);
+
+    h[0] = FC_QOS_DATA_FROMDS & 0xFF;
+    h[1] = FC_QOS_DATA_FROMDS >> 8;
+    h[2] = 144;                          /* duration, us */
+    memcpy(h + 4, c->addr, 6);
+    memcpy(h + 10, l->r->address, 6);
+    memcpy(h + 16, l->r->address, 6);
+
+    memcpy(b + 56, gip, (size_t)len);
+
+    if (!mt76_send_command(l->m, 0, b, 56 + (unsigned)len)) {
+        c->sent_failed++;
+        return 0;
+    }
+    return 1;
+}
+
+/* Power on, authenticate, light the guide button: the start-up sequence the
+ * wired path already sends, in reply to the controller's announce. */
+static void start_client(dlink *l, int wcid)
+{
+    link_client *c = &l->clients[wcid - 1];
+    unsigned char msg[GIP_HEADER_SIZE + 8];
+    int i, len;
+
+    for (i = 0; i < gip_init_count; i++) {
+        len = gip_build(msg, (int)sizeof msg, gip_init_seq[i].cmd,
+                        (unsigned)(++c->seq & 0xFF), gip_init_seq[i].payload,
+                        gip_init_seq[i].len);
+        send_gip(l, wcid, msg, len);
+    }
+    c->last_init = time(NULL);
+}
+
+static void client_input(dlink *l, int wcid, const pad_state *st)
+{
+    link_client *c = &l->clients[wcid - 1];
+    char id[24];
+
+    c->inputs++;
+
+    if (c->pad < 0) {
+        snprintf(id, sizeof id, "%02x:%02x:%02x:%02x:%02x:%02x", c->addr[0],
+                 c->addr[1], c->addr[2], c->addr[3], c->addr[4], c->addr[5]);
+        c->pad = pads_attach("wireless", id);
+    }
+    if (c->pad >= 0) pads_update(c->pad, st);
+
+    if (st->buttons != c->last_buttons && c->changes_logged < CHANGES_LOGGED) {
+        c->changes_logged++;
+        log_line("    client %d input: buttons %04X  LT %4u RT %4u  "
+                 "L %6d,%6d  R %6d,%6d", wcid, (unsigned)st->buttons,
+                 st->lt, st->rt, st->lx, st->ly, st->rx, st->ry);
+    }
+    c->last_buttons = st->buttons;
+}
+
+/* One radio frame's payload from a client: GIP messages back to back. */
+static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len)
 {
     link_client *c;
     char what[32];
@@ -180,7 +282,45 @@ static void client_data(dlink *l, int wcid, const unsigned char *gip, uint32_t l
     if (c->dumped < DUMP_PER_CLIENT) {
         c->dumped++;
         snprintf(what, sizeof what, "client %d GIP", wcid);
-        hex(what, gip, len);
+        hex(what, p, len);
+    }
+
+    while (len >= GIP_HEADER_SIZE) {
+        uint32_t n = GIP_HEADER_SIZE + p[3];
+        pad_state st;
+
+        /* Long and chunked messages (length above 127) are not used by a
+         * gamepad's input and are not decoded here. */
+        if (p[3] & 0x80 || n > len) break;
+
+        if (gip_wants_ack(p)) {
+            unsigned char ack[GIP_HEADER_SIZE + 16];
+            if (send_gip(l, wcid, ack, gip_build_ack(ack, (int)sizeof ack, p)))
+                c->acked++;
+        }
+
+        switch (p[0]) {
+        case GIP_CMD_ANNOUNCE:
+            if (time(NULL) - c->last_init >= INIT_INTERVAL_SECONDS) {
+                log_line("  adapter: client %d announced %02X%02X:%02X%02X -- "
+                         "starting it", wcid, p[13], p[12], p[15], p[14]);
+                start_client(l, wcid);
+            }
+            break;
+        case GIP_CMD_STATUS:
+            if (n >= GIP_HEADER_SIZE + 1 && c->inputs == 0)
+                log_line("  adapter: client %d status %02X", wcid,
+                         p[GIP_HEADER_SIZE]);
+            break;
+        case GIP_CMD_AUTHENTICATE:
+            log_line("  adapter: client %d sent an authentication message", wcid);
+            break;
+        default:
+            if (gip_decode_input(p, (int)n, &st)) client_input(l, wcid, &st);
+        }
+
+        p += n;
+        len -= n;
     }
 }
 
@@ -295,6 +435,13 @@ void link_handle(dlink *l, const unsigned char *p, uint32_t len)
         log_line("  adapter: firmware reported a crash (coredump event)");
         break;
     }
+}
+
+void link_close(dlink *l)
+{
+    int i;
+    for (i = 0; i < MT76_MAX_CLIENTS; i++)
+        if (l->clients[i].used) remove_client(l, i + 1, "stopping");
 }
 
 void link_tick(dlink *l, time_t now)

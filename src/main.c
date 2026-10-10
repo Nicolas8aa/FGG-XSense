@@ -16,7 +16,7 @@
  *
  * Resident: it waits for controllers, serves them while connected and waits
  * again, so it can be autoloaded before one is plugged in. Holding View+Menu
- * on any controller stops it.
+ * on any controller stops it, as does creating /data/fgg-xsense/stop.
  *
  * The PS button cannot be sent through a virtual pad -- see the README.
  */
@@ -35,6 +35,9 @@
 
 #define STATE_DIR "/data/fgg-xsense"
 #define LOG_PATH  STATE_DIR "/xsense.log"
+
+/* Creating this file (e.g. over FTP) stops the payload, as View+Menu does. */
+#define STOP_TRIGGER STATE_DIR "/stop"
 
 /* How often to look for newly connected controllers. */
 #define SCAN_SECONDS 3
@@ -169,6 +172,11 @@ int main(void)
 
         if (pads_tick(now)) {
             log_line("  View+Menu held -- stopping");
+            break;
+        }
+        if (access(STOP_TRIGGER, F_OK) == 0) {
+            unlink(STOP_TRIGGER);
+            log_line("  stop file found -- stopping");
             break;
         }
 

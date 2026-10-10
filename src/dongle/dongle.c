@@ -98,12 +98,14 @@ static void run_radio(mt76 *m, mt76_radio *r, const char *node)
             if (access(node, F_OK) != 0 ||
                 (!mt76_rr(m, MT_FCE_DMA_ADDR | MT_VEND_TYPE_CFG, &v) && mt76_gone(m))) {
                 log_line("  adapter %s: unplugged", node);
+                link_close(&l);
                 return;
             }
         }
 
         if (!busy) usleep(2000);
     }
+    link_close(&l);
 }
 
 /* Holds the adapter, checking every few seconds that it is still connected.

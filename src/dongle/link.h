@@ -17,8 +17,13 @@
 typedef struct {
     int     used;
     uint8_t addr[6];
-    long    frames;
+    long    frames, inputs, acked, sent_failed;
     int     dumped;
+    int     seq;            /* our GIP sequence number towards it */
+    int     pad;            /* pad table slot, -1 until it sends input */
+    time_t  last_init;      /* when the start-up sequence was last sent */
+    uint32_t last_buttons;
+    int     changes_logged;
 } link_client;
 
 typedef struct {
@@ -41,6 +46,9 @@ void link_set_pairing(dlink *l, int on, const char *why);
 
 /* Handles one incoming message from either endpoint. */
 void link_handle(dlink *l, const unsigned char *p, uint32_t len);
+
+/* Removes every controller, e.g. when the payload stops. */
+void link_close(dlink *l);
 
 /* Housekeeping: pairing timeout, the pairing trigger file, the periodic
  * summary. */

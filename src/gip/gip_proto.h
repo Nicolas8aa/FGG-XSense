@@ -12,6 +12,8 @@
 
 /* Message types. Only the ones this program acts on are named. */
 #define GIP_CMD_ACK              0x01
+#define GIP_CMD_ANNOUNCE         0x02
+#define GIP_CMD_STATUS           0x03
 #define GIP_CMD_SET_DEVICE_STATE 0x05
 #define GIP_CMD_AUTHENTICATE     0x06
 #define GIP_CMD_GUIDE_BUTTON     0x07
