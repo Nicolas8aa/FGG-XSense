@@ -36,9 +36,14 @@ all: $(ELF)
 $(ELF): $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+# -MMD records each object's headers, so changing a header rebuilds every
+# object that includes it -- without it, a stale object can disagree with the
+# others about an enum or a struct.
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
+
+-include $(OBJS:.o=.d) $(BUILD)/tools/probe.d
 
 test: $(ELF)
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $^
