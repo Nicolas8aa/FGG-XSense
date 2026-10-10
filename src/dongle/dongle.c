@@ -3,6 +3,7 @@
 #include "dongle/mt76_boot.h"
 #include "dongle/mt76_fw.h"
 #include "dongle/mt76_radio.h"
+#include "dongle/link.h"
 #include "log.h"
 #include "pads.h"
 #include "usb/ugen.h"
@@ -28,17 +29,6 @@
 #define SLOT_FIRST_READ (MT76_SLOT_CMD + 1)
 #define SLOTS (SLOT_FIRST_READ + CMD_READS + WLAN_READS)
 
-/* How many incoming messages to log in full, and how often to summarise. */
-#define DUMP_FIRST     12
-#define REPORT_SECONDS 60
-
-/* Microcontroller event types (xone enum xone_mt76_event). */
-#define EVT_BUTTON      0x04
-#define EVT_CHANNELS    0x0a
-#define EVT_PACKET_RX   0x0c
-#define EVT_COREDUMP    0x0d
-#define EVT_CLIENT_LOST 0x0e
-
 static int g_trace;
 
 void dongle_set_trace(int on) { g_trace = on; }
@@ -61,90 +51,47 @@ static void nap(int seconds)
     for (i = 0; i < seconds * 10 && !pads_stopping(); i++) usleep(100000);
 }
 
-typedef struct {
-    long messages, errors, wlan, events[16];
-    int  dumped;
-} rx_stats;
-
-static void dump(const char *what, const unsigned char *p, uint32_t len)
+/* Keeps reads queued on both incoming endpoints and hands whatever arrives
+ * to the link, checking every few seconds that the adapter is still
+ * connected. Returns when it is unplugged or the payload stops. */
+static void run_radio(mt76 *m, mt76_radio *r, const char *node)
 {
-    char hex[3 * 32 + 1];
-    uint32_t i, n = len < 32 ? len : 32;
-
-    for (i = 0; i < n; i++) snprintf(hex + 3 * i, 4, "%02X ", p[i]);
-    hex[3 * n] = '\0';
-    log_line("    %s %u bytes: %s", what, len, hex);
-}
-
-/* Looks at one incoming message: its header says which port it came from
- * and, for the microcontroller's port, which event it is. */
-static void handle_rx(const unsigned char *p, uint32_t len, int wlan_ep,
-                      rx_stats *st)
-{
-    uint32_t info, port, evt;
-
-    st->messages++;
-    if (len < 8) return;
-
-    info = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
-           ((uint32_t)p[3] << 24);
-    port = FIELD_GET(MT_RX_FCE_INFO_D_PORT, info);
-    evt = FIELD_GET(MT_RX_FCE_INFO_EVT_TYPE, info);
-
-    if (st->dumped < DUMP_FIRST) {
-        st->dumped++;
-        dump(wlan_ep ? "radio" : "event", p, len);
-    }
-
-    if (port == MT_WLAN_PORT) {
-        st->wlan++;
-        return;
-    }
-    if (port != MT_CPU_RX_PORT) return;
-
-    st->events[evt & 0x0F]++;
-    if (evt == EVT_BUTTON) {
-        log_line("  adapter: its button was pressed");
-        notify("FGG-XSense: adapter button pressed");
-    } else if (evt == EVT_COREDUMP) {
-        log_line("  adapter: firmware reported a crash (coredump event)");
-    }
-}
-
-/* Keeps reads queued on both incoming endpoints and handles whatever
- * arrives, checking every few seconds that the adapter is still connected.
- * Returns when it is unplugged or the payload stops. */
-static void run_radio(mt76 *m, const char *node)
-{
-    time_t last_check = time(NULL), last_note = last_check;
-    rx_stats st;
+    time_t last_check = time(NULL);
+    dlink l;
     int i;
 
-    memset(&st, 0, sizeof st);
+    link_init(&l, m, r);
+
+    /* Pairing opens by itself at first, as dlundqvist/xone does, so a
+     * controller already paired with this adapter reconnects and a new one
+     * can pair without touching anything. */
+    link_set_pairing(&l, 1, "adapter started");
 
     while (!pads_stopping()) {
         ugen_completion c;
         time_t now;
         int busy = 0;
 
+        /* What arrived while a command was being sent comes first, before
+         * its slot is reused for the next read. */
+        while (mt76_take_deferred(m, &c) || ugen_fs_complete(m->u, &c)) {
+            busy = 1;
+            if (c.slot < SLOT_FIRST_READ) continue;
+            if (c.status != 0) {
+                l.errors++;
+                continue;
+            }
+            if (c.frames > 0) link_handle(&l, ugen_slot_buf(m->u, c.slot), c.len);
+        }
+
         for (i = SLOT_FIRST_READ; i < SLOTS; i++) {
             uint32_t size = i < SLOT_FIRST_READ + CMD_READS ? CMD_BUF : WLAN_BUF;
             ugen_fs_start(m->u, i, size);
         }
 
-        while (ugen_fs_complete(m->u, &c)) {
-            busy = 1;
-            if (c.slot < SLOT_FIRST_READ) continue;
-            if (c.status != 0) {
-                st.errors++;
-                continue;
-            }
-            if (c.frames > 0)
-                handle_rx(ugen_slot_buf(m->u, c.slot), c.len,
-                          c.slot >= SLOT_FIRST_READ + CMD_READS, &st);
-        }
-
         now = time(NULL);
+        link_tick(&l, now);
+
         if (now - last_check >= WATCH_SECONDS) {
             uint32_t v;
             last_check = now;
@@ -153,14 +100,6 @@ static void run_radio(mt76 *m, const char *node)
                 log_line("  adapter %s: unplugged", node);
                 return;
             }
-        }
-        if (now - last_note >= REPORT_SECONDS) {
-            last_note = now;
-            log_line("  adapter: %ld message(s), %ld radio frame(s), %ld transfer "
-                     "error(s); events button %ld, channels %ld, packet %ld, "
-                     "client lost %ld", st.messages, st.wlan, st.errors,
-                     st.events[EVT_BUTTON], st.events[EVT_CHANNELS],
-                     st.events[EVT_PACKET_RX], st.events[EVT_CLIENT_LOST]);
         }
 
         if (!busy) usleep(2000);
@@ -256,7 +195,7 @@ void *dongle_run(void *arg)
     }
 
     notify("FGG-XSense: wireless adapter radio on");
-    run_radio(&m, node);
+    run_radio(&m, &radio, node);
 
 done:
     mt76_fw_free(&fw);

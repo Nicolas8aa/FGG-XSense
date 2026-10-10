@@ -35,4 +35,17 @@ int mt76_radio_init(mt76 *m, mt76_radio *r);
  * receive filter is widened to let pairing requests in. */
 int mt76_radio_set_pairing(mt76 *m, mt76_radio *r, int enable);
 
+/* Clients are numbered by WCID, 1..MT76_MAX_CLIENTS. */
+#define MT76_MAX_CLIENTS 16
+
+/* Admits a controller that asked to associate: records its address in the
+ * WCID table, tells the firmware, and answers the request. */
+int mt76_radio_associate(mt76 *m, mt76_radio *r, int wcid, const uint8_t *addr);
+
+/* Answers a controller's pairing request. */
+int mt76_radio_pair_client(mt76 *m, mt76_radio *r, const uint8_t *addr);
+
+/* Forgets a client. */
+int mt76_radio_remove_client(mt76 *m, int wcid);
+
 #endif

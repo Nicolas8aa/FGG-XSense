@@ -95,27 +95,26 @@ int mt76_dev_mode(mt76 *m, unsigned mode)
     return 1;
 }
 
-int mt76_send_command(mt76 *m, unsigned cmd, const void *payload, unsigned len)
+/* Sends one message on the command endpoint: a four-byte header, the
+ * payload padded to four bytes, then a four-byte zero trailer (xone
+ * xone_mt76_prep_message). Waits for the write, keeping any other slot's
+ * completion that arrives meanwhile. */
+static int send_message(mt76 *m, uint32_t info, const void *payload, unsigned len)
 {
     unsigned char *buf;
     unsigned padded, total;
-    ugen_completion c;
+    int waited;
 
     if (len > MT76_CMD_MAX) {
         m->err = EINVAL;
         return 0;
     }
 
-    /* Header, payload padded to four bytes, then a four-byte zero trailer
-     * (xone xone_mt76_prep_message). */
     padded = (len + 3) & ~3u;
     total = 4 + padded + 4;
 
     buf = ugen_slot_buf(m->u, MT76_SLOT_CMD);
-    put_le32(buf, MT_MCU_MSG_TYPE_CMD |
-                  FIELD_PREP(MT_MCU_MSG_PORT, MT_CPU_TX_PORT) |
-                  FIELD_PREP(MT_MCU_MSG_CMD_TYPE, cmd) |
-                  FIELD_PREP(MT_MCU_MSG_LEN, padded));
+    put_le32(buf, info | FIELD_PREP(MT_MCU_MSG_LEN, padded));
     memcpy(buf + 4, payload, len);
     memset(buf + 4 + len, 0, total - 4 - len);
 
@@ -123,15 +122,79 @@ int mt76_send_command(mt76 *m, unsigned cmd, const void *payload, unsigned len)
         m->err = errno ? errno : EIO;
         return 0;
     }
-    if (!ugen_fs_wait(m->u, MT76_SLOT_CMD, BULK_TIMEOUT_MS + 200, &c)) {
-        m->err = ETIMEDOUT;
+
+    for (waited = 0; waited <= BULK_TIMEOUT_MS + 200; waited++) {
+        ugen_completion c;
+
+        while (ugen_fs_complete(m->u, &c)) {
+            if (c.slot != MT76_SLOT_CMD) {
+                if (m->ndeferred < MT76_DEFERRED_MAX)
+                    m->deferred[m->ndeferred++] = c;
+                else
+                    m->dropped++;
+                continue;
+            }
+            if (c.status != 0) {
+                m->err = EIO;
+                if (m->trace) log_line("    message %08X: status %d",
+                                       (unsigned)info, c.status);
+                return 0;
+            }
+            return 1;
+        }
+        usleep(1000);
+    }
+    m->err = ETIMEDOUT;
+    return 0;
+}
+
+int mt76_send_command(mt76 *m, unsigned cmd, const void *payload, unsigned len)
+{
+    return send_message(m, MT_MCU_MSG_TYPE_CMD |
+                           FIELD_PREP(MT_MCU_MSG_PORT, MT_CPU_TX_PORT) |
+                           FIELD_PREP(MT_MCU_MSG_CMD_TYPE, cmd),
+                        payload, len);
+}
+
+int mt76_send_wlan(mt76 *m, const void *frame, unsigned len)
+{
+    unsigned char buf[20 + 128];
+    unsigned char *txwi = buf;
+
+    if (len > sizeof buf - 20) {
+        m->err = EINVAL;
         return 0;
     }
-    if (c.status != 0) {
-        m->err = EIO;
-        if (m->trace) log_line("    command %u: status %d", cmd, c.status);
-        return 0;
-    }
+
+    /* Acknowledged, OFDM, no particular client (xone xone_mt76_send_wlan). */
+    memset(txwi, 0, 20);
+    put_le32(txwi, FIELD_PREP(MT_TXWI_FLAGS_MPDU_DENSITY, 5) |   /* 4 us */
+                   (FIELD_PREP(MT_RXWI_RATE_PHY, MT_PHY_TYPE_OFDM) << 16));
+    txwi[4] = MT_TXWI_ACK_CTL_REQ;
+    txwi[5] = 0xff;
+    txwi[6] = (unsigned char)len;
+    txwi[7] = (unsigned char)(len >> 8);
+    memcpy(buf + 20, frame, len);
+
+    return send_message(m, FIELD_PREP(MT_TXD_INFO_DPORT, MT_WLAN_PORT) |
+                           FIELD_PREP(MT_TXD_INFO_QSEL, MT_QSEL_EDCA) |
+                           MT_TXD_INFO_WIV | MT_TXD_INFO_80211,
+                        buf, 20 + len);
+}
+
+int mt76_set_led(mt76 *m, uint32_t mode)
+{
+    unsigned char p[4];
+    put_le32(p, mode);
+    return mt76_send_command(m, MT_CMD_LED_MODE_OP, p, sizeof p);
+}
+
+int mt76_take_deferred(mt76 *m, ugen_completion *c)
+{
+    if (m->ndeferred == 0) return 0;
+    *c = m->deferred[0];
+    m->ndeferred--;
+    memmove(m->deferred, m->deferred + 1, (size_t)m->ndeferred * sizeof *c);
     return 1;
 }
 

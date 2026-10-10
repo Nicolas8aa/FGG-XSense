@@ -360,6 +360,64 @@ int mt76_radio_set_pairing(mt76 *m, mt76_radio *r, int enable)
                    FIELD_PREP(MT_BEACON_TIME_CFG_INTVAL, 0x0640));
 }
 
+/* A three-address 802.11 header from us to `to`. */
+static void hdr3(unsigned char *h, uint16_t fc, const uint8_t *to,
+                 const mt76_radio *r)
+{
+    memset(h, 0, 24);
+    put_le16(h, fc);
+    memcpy(h + 4, to, 6);
+    memcpy(h + 10, r->address, 6);
+    memcpy(h + 16, r->address, 6);
+}
+
+#define FC_ASSOC_RESP 0x0010
+#define FC_RESERVED   0x0070   /* management, the subtype Microsoft uses */
+#define WLAN_RESERVED 0x70
+#define CLIENT_PAIR_RESP 0x02
+
+int mt76_radio_associate(mt76 *m, mt76_radio *r, int wcid, const uint8_t *addr)
+{
+    /* xone_mt76_associate_client: the firmware's client slot is wcid - 1. */
+    unsigned char add[8] = { (unsigned char)(wcid - 1), 0, 0, 0, 0x40, 0x1f, 0, 0 };
+    unsigned char f[24 + 6 + 8];
+
+    /* Association response: capabilities 0, then the status code and
+     * association ID the original driver uses, then eight zero bytes. */
+    memset(f, 0, sizeof f);
+    hdr3(f, FC_ASSOC_RESP, addr, r);
+    put_le16(f + 26, 0x0110);
+    put_le16(f + 28, 0x0f00);
+
+    return mt76_write_burst(m, MT_WCID_ADDR(wcid), addr, 6) &&
+           mt76_send_ms_command(m, MT76_MS_ADD_CLIENT, add, sizeof add) &&
+           mt76_send_wlan(m, f, sizeof f);
+}
+
+int mt76_radio_pair_client(mt76 *m, mt76_radio *r, const uint8_t *addr)
+{
+    static const unsigned char data[9] = {
+        0x00, 0x45, 0x55, 0x01, 0x0f, 0x8f, 0xff, 0x87, 0x1f,
+    };
+    unsigned char f[24 + 2 + sizeof data];
+
+    hdr3(f, FC_RESERVED, addr, r);
+    f[24] = WLAN_RESERVED;
+    f[25] = CLIENT_PAIR_RESP;
+    memcpy(f + 26, data, sizeof data);
+
+    return mt76_send_wlan(m, f, sizeof f);
+}
+
+int mt76_radio_remove_client(mt76 *m, int wcid)
+{
+    unsigned char rm[4] = { (unsigned char)(wcid - 1), 0, 0, 0 };
+    static const uint8_t zero[6];
+
+    return mt76_send_ms_command(m, MT76_MS_REMOVE_CLIENT, rm, sizeof rm) &&
+           mt76_write_burst(m, MT_WCID_ADDR(wcid), zero, sizeof zero);
+}
+
 int mt76_radio_init(mt76 *m, mt76_radio *r)
 {
     memset(r, 0, sizeof *r);

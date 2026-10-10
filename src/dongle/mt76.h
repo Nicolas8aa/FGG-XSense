@@ -40,11 +40,23 @@
 #define MT76_MS_SET_IDLE_TIME       0x05
 #define MT76_MS_SET_CHAN_CANDIDATES 0x07
 
+/* Completions of other slots that arrive while a command waits for its own
+ * write. They are kept, not dropped, and handed back by mt76_take_deferred. */
+#define MT76_DEFERRED_MAX 64
+
 typedef struct {
     ugen *u;
     int   err;     /* errno of the last failed request, 0 if none */
     int   trace;   /* log every register access */
+
+    ugen_completion deferred[MT76_DEFERRED_MAX];
+    int             ndeferred;
+    long            dropped;   /* completions lost because the queue was full */
 } mt76;
+
+/* Hands back one completion that arrived while a command was waiting.
+ * Returns 0 when there are none left. */
+int mt76_take_deferred(mt76 *m, ugen_completion *c);
 
 int mt76_rr(mt76 *m, uint32_t addr, uint32_t *val);
 int mt76_wr(mt76 *m, uint32_t addr, uint32_t val);
@@ -60,6 +72,16 @@ int mt76_dev_mode(mt76 *m, unsigned mode);
 
 /* Sends a command to the chip's microcontroller and waits for the write. */
 int mt76_send_command(mt76 *m, unsigned cmd, const void *payload, unsigned len);
+
+/* Sends an 802.11 frame (header onwards) through the radio, behind a TXWI
+ * that asks for acknowledgement (xone xone_mt76_send_wlan). */
+int mt76_send_wlan(mt76 *m, const void *frame, unsigned len);
+
+/* The adapter's LED: 0 blinking, 1 on, 2 off. */
+#define MT76_LED_BLINK 0x00
+#define MT76_LED_ON    0x01
+#define MT76_LED_OFF   0x02
+int mt76_set_led(mt76 *m, uint32_t mode);
 
 /* A command for Microsoft's firmware: the command word, then `data`. */
 int mt76_send_ms_command(mt76 *m, uint32_t cmd, const void *data, unsigned len);
