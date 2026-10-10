@@ -25,6 +25,8 @@ typedef struct {
     uint32_t last_buttons;
     int     changes_logged;
     time_t  connected_at;
+    time_t  lost_at;        /* nonzero while retaining a pad across reconnect */
+    int     radio_active;   /* adapter currently owns this client slot */
     int     silence_reported;
     int     battery_level, battery_type;
     long    rssi_sum, rssi_n;   /* signal readings since the last report */
