@@ -7,14 +7,15 @@
 # adapter. Sources and checksums are the ones dlundqvist/xone's
 # install/firmware.sh uses.
 #
-#   tools/fetch_firmware.sh <adapter-pid> [ps5-host] [ftp-port]
-#   tools/fetch_firmware.sh 02e6 192.168.1.95 2121
+#   tools/fetch_firmware.sh <adapter-pid> <console-ip> [ftp-port]
+#   tools/fetch_firmware.sh 02e6 192.168.0.20 2121
 #
 # Needs curl, bsdtar (built into macOS as tar) and shasum.
 set -eu
 
-PID=$(echo "${1:?usage: $0 <02e6|02fe|02f9|091e> [host] [port]}" | tr 'A-Z' 'a-z')
-HOST=${2:-192.168.1.95}
+USAGE="usage: $0 <02e6|02fe|02f9|091e> <console-ip> [ftp-port]"
+PID=$(echo "${1:?$USAGE}" | tr 'A-Z' 'a-z')
+HOST=${2:?$USAGE}
 PORT=${3:-2121}
 
 BASE=https://catalog.s.download.windowsupdate.com

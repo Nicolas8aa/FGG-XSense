@@ -186,6 +186,21 @@ DeleteDevice  ioctl(fd, 0x80104850, &req)
 So a payload can register a controller without patching SceShellCore or
 anything else. All eleven device types the kernel recognises were accepted.
 
+**The wireless adapter.** Microsoft's adapter is a MediaTek MT76 radio running
+Microsoft firmware that the host uploads on every power-up. The payload drives
+it the way the reverse-engineered Linux drivers do — register access through
+vendor control requests, firmware and commands on a bulk endpoint, radio frames
+on another — and the controllers on it speak the same GIP as over a cable,
+inside 802.11 frames. So the wired code's protocol handling serves both.
+
+Two things here differ from the Linux drivers, both found on hardware with a
+`02E6` adapter. A GIP acknowledgement must carry its own options byte, not the
+acknowledged message's, or a wireless controller keeps resending. And the
+adapter cannot be fully reset by software once its radio has run: restarting
+its firmware in place leaves the radio unreliable, so a payload restart
+mid-session asks for a replug. After a jailbreak the adapter has just powered
+up and starts cleanly.
+
 **One trap worth recording.** The report the kernel reads is *not* `ScePadData`.
 `libScePad` translates its caller's `ScePadData` into a differently shaped
 buffer first — buttons land at `+0x0C`, sticks at `+0x10`. Passing a
