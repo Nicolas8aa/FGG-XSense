@@ -408,10 +408,13 @@ int32_t vpad_sce_add(char *why, int whylen)
     handle = (int32_t)(dev & 0xFFFFFFFFu);
     r = p_bind(dev, user);
     if (r != 0) {
-        p_delete(handle);
-        snprintf(why, (size_t)whylen, "binding device %#llx to user %#x failed: %#x",
-                 (unsigned long long)dev, (unsigned)user, (unsigned)r);
-        handle = -1;
+        /* Refused (0x809b0005 has been seen, perhaps because the user
+         * already has a controller). The device is kept: the console's own
+         * "who is using this controller" screen, up since AddDevice, assigns
+         * it once someone chooses with the pad itself. */
+        snprintf(why, (size_t)whylen, "device %#llx, binding to user %#x refused (%#x) -- "
+                 "choose the user on screen", (unsigned long long)dev, (unsigned)user,
+                 (unsigned)r);
         goto out;
     }
     snprintf(why, (size_t)whylen, "device %#llx bound to user %#x",
