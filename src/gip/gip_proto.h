@@ -65,6 +65,13 @@ int gip_build_ack(unsigned char *buf, int cap, const unsigned char *msg);
 /* Builds the message that switches a controller off. Returns its length. */
 int gip_build_power_off(unsigned char *buf, int cap, unsigned seq);
 
+/* Decodes a controller status report's two-bit battery level and type. The
+ * level is 0=low, 1=normal, 2=high, 3=full.  Type 0 is external power or
+ * charging, 1 standard batteries, and 2 a rechargeable pack. */
+int gip_decode_battery(const unsigned char *msg, int n, int *level, int *type);
+const char *gip_battery_level_name(int level);
+const char *gip_battery_type_name(int type);
+
 /* Decodes an input report. Returns 1 and fills `out` if `msg` is one, 0 if
  * it is some other message or too short. */
 int gip_decode_input(const unsigned char *msg, int n, pad_state *out);

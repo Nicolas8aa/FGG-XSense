@@ -181,6 +181,22 @@ static void test_power_off(void)
           buf[3] == 1 && buf[4] == 0x04, "power-off message wrong");
 }
 
+static void test_battery(void)
+{
+    const unsigned char status[] = { GIP_CMD_STATUS, 0x20, 3, 1, 0x09 };
+    int level = -1, type = -1;
+
+    CHECK(gip_decode_battery(status, (int)sizeof status, &level, &type),
+          "battery status not decoded");
+    CHECK(level == 1 && type == 2, "battery status = level %d type %d", level, type);
+    CHECK(strcmp(gip_battery_level_name(level), "normal") == 0,
+          "battery level label wrong");
+    CHECK(strcmp(gip_battery_type_name(type), "rechargeable pack") == 0,
+          "battery type label wrong");
+    CHECK(!gip_decode_battery(status, GIP_HEADER_SIZE, &level, &type),
+          "short status accepted");
+}
+
 static void test_init_sequence(void)
 {
     /* Power on, authenticate, light the guide LED -- as gip_init sent them. */
@@ -265,6 +281,7 @@ int main(void)
     test_decode_rejects();
     test_ack();
     test_power_off();
+    test_battery();
     test_init_sequence();
     test_sha256();
     test_fw_parse();

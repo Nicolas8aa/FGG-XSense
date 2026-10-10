@@ -53,6 +53,7 @@ typedef struct {
     unsigned vendor, product;
     int   iface, ep_in, ep_out, mps_in;
     int   seq;
+    int   battery_level, battery_type;
 } wired;
 
 /* Everything the loop counts, kept together so the periodic line and the
@@ -181,6 +182,19 @@ static void acknowledge(wired *w, const unsigned char *msg)
     send_msg(w, ack, gip_build_ack(ack, (int)sizeof ack, msg));
 }
 
+static void report_battery(wired *w, const unsigned char *msg, int n)
+{
+    int level, type;
+
+    if (!gip_decode_battery(msg, n, &level, &type) ||
+        (level == w->battery_level && type == w->battery_type))
+        return;
+    w->battery_level = level;
+    w->battery_type = type;
+    log_line("  %s: battery %s (%s)", w->node, gip_battery_level_name(level),
+             gip_battery_type_name(type));
+}
+
 /* Collects the next message, if one has arrived: its length, 0 when nothing
  * is ready, -1 on a transfer error. Errors are ordinary here -- the transfer
  * layer refuses often enough that a healthy controller still only delivers a
@@ -284,6 +298,8 @@ static void serve(wired *w, int pad, stats *st)
             if (gip_decode_input(msg, n, &state)) {
                 st->reports++;
                 if (pads_update(pad, &state)) st->delivered++;
+            } else if (msg[0] == GIP_CMD_STATUS) {
+                report_battery(w, msg, n);
             }
         }
 
@@ -340,6 +356,7 @@ void *gip_wired_run(void *arg)
 
     memset(&w, 0, sizeof w);
     memset(&st, 0, sizeof st);
+    w.battery_level = w.battery_type = -1;
     snprintf(w.node, sizeof w.node, "%s", (const char *)arg);
 
     if (!bring_up(&w, why, (int)sizeof why)) {
