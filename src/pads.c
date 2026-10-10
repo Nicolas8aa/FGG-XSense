@@ -75,15 +75,12 @@ out:
 
 int pads_update(int n, const pad_state *state)
 {
-    unsigned char report[VPAD_REPORT_SIZE];
     int ok;
-
-    vpad_translate(state, report);
 
     pthread_mutex_lock(&g_lock);
     g_slots[n].buttons = state->buttons;
-    ok = vpad_submit(g_slots[n].pad, report);
-    if (g_slots[n].mirror) vpad_submit(g_slots[n].mirror, report);
+    ok = vpad_submit(g_slots[n].pad, state);
+    if (g_slots[n].mirror) vpad_submit(g_slots[n].mirror, state);
     if (ok) g_slots[n].delivered++;
     else    g_slots[n].failed++;
     pthread_mutex_unlock(&g_lock);

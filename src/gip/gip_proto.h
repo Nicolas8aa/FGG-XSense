@@ -65,6 +65,10 @@ int gip_build_ack(unsigned char *buf, int cap, const unsigned char *msg);
 /* Builds the message that switches a controller off. Returns its length. */
 int gip_build_power_off(unsigned char *buf, int cap, unsigned seq);
 
+/* Decodes the guide (Xbox) button message. Returns 1 and sets `down` if
+ * `msg` is one, 0 otherwise. */
+int gip_decode_guide(const unsigned char *msg, int n, int *down);
+
 /* Decodes an input report. Returns 1 and fills `out` if `msg` is one, 0 if
  * it is some other message or too short. */
 int gip_decode_input(const unsigned char *msg, int n, pad_state *out);

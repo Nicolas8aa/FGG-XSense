@@ -28,6 +28,7 @@
 #include "log.h"
 #include "pads.h"
 #include "usb/usb_enum.h"
+#include "vpad_sce.h"
 
 #include <pthread.h>
 #include <string.h>
@@ -162,6 +163,12 @@ int main(void)
     if (config_int("mirror", 0))
         log_line("  mirror=1: every controller is published twice");
 
+    /* Sony's pad library gives the Xbox button the PS button's job and binds
+     * pads to the user; without it, pads are published directly as before.
+     * ps_button=0 in the config keeps to the direct route. */
+    if (config_int("ps_button", 1) && !vpad_sce_init())
+        log_line("  vpad: Sony's pad library unavailable -- no PS button");
+
     notify("FGG-XSense: waiting for an Xbox controller");
 
     for (;;) {
@@ -212,6 +219,7 @@ int main(void)
         g_adapter.active = 0;
     }
 
+    vpad_sce_shutdown();
     notify("FGG-XSense: stopped");
     lock_release();
     log_close();

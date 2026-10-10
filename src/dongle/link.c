@@ -326,11 +326,14 @@ static void start_client(dlink *l, int wcid)
     c->last_init = time(NULL);
 }
 
-static void client_input(dlink *l, int wcid, const pad_state *st)
+static void client_input(dlink *l, int wcid, const pad_state *in)
 {
     link_client *c = &l->clients[wcid - 1];
+    pad_state state = *in, *st = &state;
     char id[24];
 
+    state.buttons = (state.buttons & ~(uint32_t)PAD_GUIDE) | (c->guide ? PAD_GUIDE : 0);
+    c->last = state;
     c->inputs++;
 
     if (c->pad < 0) {
@@ -412,6 +415,14 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
             break;
         case GIP_CMD_AUTHENTICATE:
             log_line("  adapter: client %d sent an authentication message", wcid);
+            break;
+        case GIP_CMD_GUIDE_BUTTON:
+            /* The guide button comes in a message of its own; it rides along
+             * with the last input as the PS button. */
+            if (gip_decode_guide(p, (int)n, &c->guide)) {
+                st = c->last;
+                client_input(l, wcid, &st);
+            }
             break;
         default:
             if (gip_decode_input(p, (int)n, &st)) client_input(l, wcid, &st);

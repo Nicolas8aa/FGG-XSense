@@ -252,7 +252,10 @@ static int rebuild(wired *w)
 static void serve(wired *w, int pad, stats *st)
 {
     time_t last_input, last_reinit, last_keepalive, last_note;
-    int since_input = 0;
+    int since_input = 0, guide = 0;
+    pad_state last;
+
+    memset(&last, 0, sizeof last);
 
     last_input = last_reinit = last_keepalive = last_note = time(NULL);
 
@@ -283,7 +286,15 @@ static void serve(wired *w, int pad, stats *st)
 
             if (gip_decode_input(msg, n, &state)) {
                 st->reports++;
+                if (guide) state.buttons |= PAD_GUIDE;
+                last = state;
                 if (pads_update(pad, &state)) st->delivered++;
+            } else if (gip_decode_guide(msg, n, &guide)) {
+                /* The guide button comes in a message of its own; it rides
+                 * along with the last input as the PS button. */
+                last.buttons = (last.buttons & ~(uint32_t)PAD_GUIDE) |
+                               (guide ? PAD_GUIDE : 0);
+                pads_update(pad, &last);
             }
         }
 

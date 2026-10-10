@@ -21,7 +21,7 @@ CFLAGS := -std=c11 -Wall -Wextra -Werror -O2 -Isrc \
 # No libScePad: the host process has not loaded it, so calls into the module
 # fault. The ioctls it wraps are issued directly instead.
 
-SRCS := src/main.c src/pads.c src/vpad.c src/lock.c src/config.c src/log.c \
+SRCS := src/main.c src/pads.c src/vpad.c src/vpad_sce.c src/lock.c src/config.c src/log.c \
         src/gip/gip_proto.c src/gip/gip_wired.c \
         src/usb/ugen.c src/usb/usb_enum.c src/sha256.c \
         src/dongle/dongle.c src/dongle/mt76_fw.c \
@@ -57,7 +57,7 @@ probe.elf: $(BUILD)/tools/probe.o $(BUILD)/src/log.o
 # Host-side tests of everything that touches no device, built with the host's
 # own compiler. Named check because `test` deploys to the console.
 HOSTCC ?= gcc
-HOST_TESTS := tests/test_core.c src/gip/gip_proto.c src/vpad.c src/sha256.c \
+HOST_TESTS := tests/test_core.c tests/stubs.c src/gip/gip_proto.c src/vpad.c src/sha256.c \
               src/dongle/mt76_fw.c
 
 check:

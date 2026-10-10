@@ -11,6 +11,7 @@
 
 #include "dongle/mt76.h"
 #include "dongle/mt76_radio.h"
+#include "pad.h"
 
 #include <time.h>
 
@@ -27,6 +28,8 @@ typedef struct {
     time_t  connected_at;
     int     silence_reported;
     long    rssi_sum, rssi_n;   /* signal readings since the last report */
+    pad_state last;             /* latest input, for the guide button */
+    int     guide;
     int     rssi_min, rssi_max;
 } link_client;
 

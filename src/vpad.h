@@ -30,8 +30,8 @@ void vpad_close(vpad *pad);
 
 int vpad_handle(const vpad *pad);
 
-/* Publishes one frame of input, already translated. Returns 0 on failure. */
-int vpad_submit(vpad *pad, const unsigned char *report);
+/* Publishes a controller's state. Returns 0 on failure. */
+int vpad_submit(vpad *pad, const pad_state *state);
 
 /* Translates a controller's state into the report the kernel reads.
  *

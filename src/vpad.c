@@ -1,4 +1,6 @@
 #include "vpad.h"
+#include "vpad_sce.h"
+#include "log.h"
 
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -75,6 +77,7 @@ typedef struct {
 
 struct vpad {
     int     used;
+    int     sce;      /* created through libScePad (vpad_sce.c) */
     int     fd;
     int32_t handle;
 };
@@ -95,6 +98,25 @@ vpad *vpad_open(uint32_t user, char *why, int whylen)
     if (!pad) {
         snprintf(why, (size_t)whylen, "all %d virtual pads in use", VPAD_MAX);
         return NULL;
+    }
+
+    /* Through Sony's library first: it carries the PS button and binds the
+     * pad to the user. The direct route below is the fallback. */
+    pad->sce = 0;
+    pad->fd = -1;
+    {
+        char sce_why[160];
+        int32_t h = vpad_sce_add(sce_why, (int)sizeof sce_why);
+        if (h >= 0) {
+            pad->sce = 1;
+            pad->handle = h;
+            pad->used = 1;
+            snprintf(why, (size_t)whylen, "through Sony's pad library, %s", sce_why);
+            return pad;
+        }
+        if (strcmp(sce_why, "Sony's pad library not in use") != 0)
+            log_line("  vpad: Sony's pad library could not add a pad (%s) -- direct "
+                     "route instead", sce_why);
     }
 
     pad->fd = open("/dev/hid", O_RDWR);
@@ -127,10 +149,14 @@ vpad *vpad_open(uint32_t user, char *why, int whylen)
     return pad;
 }
 
-int vpad_submit(vpad *pad, const unsigned char *report)
+int vpad_submit(vpad *pad, const pad_state *state)
 {
+    unsigned char report[VPAD_REPORT_SIZE];
     hid_req req;
 
+    if (pad->sce) return vpad_sce_insert(pad->handle, state);
+
+    vpad_translate(state, report);
     memset(&req, 0, sizeof req);
     req.cmd = (uint32_t)pad->handle;
     req.data = (void *)(uintptr_t)report;
@@ -143,7 +169,13 @@ void vpad_close(vpad *pad)
 {
     hid_del del;
 
-    if (!pad || pad->fd < 0) return;
+    if (!pad || !pad->used) return;
+    if (pad->sce) {
+        vpad_sce_delete(pad->handle);
+        pad->used = 0;
+        return;
+    }
+    if (pad->fd < 0) return;
 
     memset(&del, 0, sizeof del);
     del.cmd = HID_CMD_DEL;

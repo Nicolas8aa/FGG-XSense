@@ -65,6 +65,13 @@ int gip_build_power_off(unsigned char *buf, int cap, unsigned seq)
     return gip_build(buf, cap, GIP_CMD_SET_DEVICE_STATE, seq, off, (int)sizeof off);
 }
 
+int gip_decode_guide(const unsigned char *msg, int n, int *down)
+{
+    if (n < GIP_HEADER_SIZE + 1 || msg[0] != GIP_CMD_GUIDE_BUTTON) return 0;
+    *down = msg[GIP_HEADER_SIZE] & 0x01;
+    return 1;
+}
+
 int gip_decode_input(const unsigned char *msg, int n, pad_state *out)
 {
     const unsigned char *d = msg + GIP_HEADER_SIZE;
