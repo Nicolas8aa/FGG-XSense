@@ -49,6 +49,12 @@
 #define SILENT_SECONDS 10
 #define SILENT_RETRIES 3
 
+/* The adapter can report CLIENT_LOST during the short settling period after
+ * association, even though the same controller reconnects seconds later.
+ * Keeping its virtual pad prevents the PS5 from showing a second, already
+ * obsolete player-assignment screen. */
+#define RECONNECT_GRACE_SECONDS 10
+
 /* Microcontroller events (xone enum xone_mt76_event). */
 #define EVT_BUTTON      0x04
 #define EVT_CHANNELS    0x0a
@@ -185,14 +191,55 @@ static int valid_unicast(const uint8_t *a)
     return !(a[0] & 0x01) && (a[0] | a[1] | a[2] | a[3] | a[4] | a[5]);
 }
 
+static void remove_client(dlink *l, int wcid, const char *why);
+
+static void neutralize_client(link_client *c)
+{
+    pad_state neutral;
+
+    if (c->pad < 0) return;
+    memset(&neutral, 0, sizeof neutral);
+    pads_update(c->pad, &neutral);
+    c->last = neutral;
+    c->last_buttons = 0;
+    c->guide = 0;
+}
+
+static void resume_client(dlink *l, int wcid, const uint8_t *addr)
+{
+    link_client *c = &l->clients[wcid - 1];
+
+    if (!mt76_radio_associate(l->m, l->r, wcid, addr)) {
+        log_line("  adapter: reconnecting client %d failed (error %d)", wcid,
+                 l->m->err);
+        return;
+    }
+    c->radio_active = 1;
+    c->lost_at = 0;
+    c->connected_at = time(NULL);
+    c->silence_reported = 0;
+    l->nclients++;
+    led(l);
+    log_line("  adapter: client %d reconnected -- reusing its virtual pad", wcid);
+}
+
 static void associate(dlink *l, const uint8_t *addr)
 {
     int i, wcid = 0;
 
-    /* A controller already holding a slot is not given a second one. */
-    for (i = 0; i < MT76_MAX_CLIENTS; i++)
-        if (l->clients[i].used && memcmp(l->clients[i].addr, addr, 6) == 0)
+    /* A radio-active controller is already present. A recently lost one
+     * instead gets its old radio slot and virtual pad back. */
+    for (i = 0; i < MT76_MAX_CLIENTS; i++) {
+        link_client *c = &l->clients[i];
+        if (!c->used || memcmp(c->addr, addr, 6) != 0) continue;
+        if (c->radio_active) return;
+        if (time(NULL) - c->lost_at <= RECONNECT_GRACE_SECONDS) {
+            resume_client(l, i + 1, addr);
             return;
+        }
+        remove_client(l, i + 1, "reconnect grace expired");
+        break;
+    }
 
     if (!l->pairing && !is_known(addr)) {
         l->refused++;
@@ -219,6 +266,7 @@ static void associate(dlink *l, const uint8_t *addr)
 
     memset(&l->clients[wcid - 1], 0, sizeof l->clients[0]);
     l->clients[wcid - 1].used = 1;
+    l->clients[wcid - 1].radio_active = 1;
     l->clients[wcid - 1].pad = -1;
     memcpy(l->clients[wcid - 1].addr, addr, 6);
     l->nclients++;
@@ -235,10 +283,12 @@ static void associate(dlink *l, const uint8_t *addr)
 static void remove_client(dlink *l, int wcid, const char *why)
 {
     link_client *c;
+    int radio_active;
 
     if (wcid < 1 || wcid > MT76_MAX_CLIENTS) return;
     c = &l->clients[wcid - 1];
     if (!c->used) return;
+    radio_active = c->radio_active;
 
     log_line("  adapter: client %d (%02x:%02x:%02x:%02x:%02x:%02x) gone: %s, "
              "after %ld frame(s), %ld input report(s), %ld acknowledged, %ld "
@@ -247,10 +297,31 @@ static void remove_client(dlink *l, int wcid, const char *why)
              c->acked, c->sent_failed);
 
     if (c->pad >= 0) pads_detach(c->pad);
-    mt76_radio_remove_client(l->m, wcid);
+    if (radio_active) mt76_radio_remove_client(l->m, wcid);
     memset(c, 0, sizeof *c);
-    l->nclients--;
+    if (radio_active && l->nclients > 0) l->nclients--;
     led(l);
+}
+
+static void client_lost(dlink *l, int wcid, const char *why)
+{
+    link_client *c;
+
+    if (wcid < 1 || wcid > MT76_MAX_CLIENTS) return;
+    c = &l->clients[wcid - 1];
+    if (!c->used || !c->radio_active) return;
+
+    /* Do not leave a held button behind while radio traffic is absent. */
+    neutralize_client(c);
+    mt76_radio_remove_client(l->m, wcid);
+    c->radio_active = 0;
+    c->lost_at = time(NULL);
+    if (l->nclients > 0) l->nclients--;
+    led(l);
+    log_line("  adapter: client %d (%02x:%02x:%02x:%02x:%02x:%02x) lost: %s; "
+             "keeping its virtual pad for %d seconds", wcid, c->addr[0],
+             c->addr[1], c->addr[2], c->addr[3], c->addr[4], c->addr[5], why,
+             RECONNECT_GRACE_SECONDS);
 }
 
 static void pair(dlink *l, const uint8_t *addr)
@@ -360,7 +431,8 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
     link_client *c;
     char what[32];
 
-    if (wcid < 1 || wcid > MT76_MAX_CLIENTS || !l->clients[wcid - 1].used) {
+    if (wcid < 1 || wcid > MT76_MAX_CLIENTS || !l->clients[wcid - 1].used ||
+        !l->clients[wcid - 1].radio_active) {
         l->ignored++;
         return;
     }
@@ -518,7 +590,7 @@ static void wlan_frame(dlink *l, const unsigned char *p, uint32_t len)
         if (valid_unicast(addr2)) associate(l, addr2);
         break;
     case FC_DISASSOC:
-        remove_client(l, wcid, "disassociated");
+        client_lost(l, wcid, "disassociated");
         break;
     case FC_RESERVED:
         if (body_len < 2 || body[0] != WLAN_RESERVED) break;
@@ -573,7 +645,7 @@ void link_handle(dlink *l, const unsigned char *p, uint32_t len)
         wlan_frame(l, p, len);
         break;
     case EVT_CLIENT_LOST:
-        if (len >= 1) remove_client(l, p[0], "lost");
+        if (len >= 1) client_lost(l, p[0], "lost");
         break;
     case EVT_COREDUMP:
         log_line("  adapter: firmware reported a crash (coredump event)");
@@ -591,7 +663,7 @@ void link_close(dlink *l, int power_off)
     if (power_off) {
         for (i = 0; i < MT76_MAX_CLIENTS; i++) {
             link_client *c = &l->clients[i];
-            if (!c->used) continue;
+            if (!c->used || !c->radio_active) continue;
             send_gip(l, i + 1, msg,
                      gip_build_power_off(msg, (int)sizeof msg,
                                          (unsigned)(++c->seq & 0xFF)));
@@ -615,12 +687,13 @@ void link_tick(dlink *l, time_t now)
      * itself is the likely problem, and only a replug resets that. */
     for (i = 0; i < MT76_MAX_CLIENTS; i++) {
         link_client *c = &l->clients[i];
-        if (!c->used || c->frames > 0 || now - c->connected_at < SILENT_SECONDS)
+        if (!c->used || !c->radio_active || c->frames > 0 ||
+            now - c->connected_at < SILENT_SECONDS)
             continue;
         if (++l->silent_drops <= SILENT_RETRIES) {
             log_line("  adapter: client %d connected but sends nothing -- "
                      "dropping it so it reconnects", i + 1);
-            remove_client(l, i + 1, "silent");
+            client_lost(l, i + 1, "silent");
         } else if (!c->silence_reported) {
             c->silence_reported = 1;
             log_line("  adapter: client %d still sends nothing -- unplug and "
@@ -631,6 +704,13 @@ void link_tick(dlink *l, time_t now)
 
     if (l->pairing && now >= l->pairing_until)
         link_set_pairing(l, 0, "timed out");
+
+    for (i = 0; i < MT76_MAX_CLIENTS; i++) {
+        link_client *c = &l->clients[i];
+        if (c->used && !c->radio_active &&
+            now - c->lost_at > RECONNECT_GRACE_SECONDS)
+            remove_client(l, i + 1, "reconnect grace expired");
+    }
 
     if (access(PAIR_TRIGGER, F_OK) == 0) {
         unlink(PAIR_TRIGGER);
