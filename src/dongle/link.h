@@ -39,6 +39,7 @@ typedef struct {
     int         nclients;
 
     long messages, wlan, errors, ignored, refused, renumbered, events[16];
+    int  silent_drops;   /* consecutive silent clients dropped */
 } dlink;
 
 void link_init(dlink *l, mt76 *m, mt76_radio *r);

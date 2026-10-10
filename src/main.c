@@ -22,6 +22,7 @@
  */
 #include "config.h"
 #include "dongle/dongle.h"
+#include "dongle/mt76_radio.h"
 #include "gip/gip_wired.h"
 #include "lock.h"
 #include "log.h"
@@ -157,6 +158,7 @@ int main(void)
     config_load(CONFIG_PATH);
     pads_set_mirror(config_int("mirror", 0));
     dongle_set_trace(config_int("trace_mt76", 0));
+    mt76_radio_force_channel(config_int("adapter_channel", 0));
     if (config_int("mirror", 0))
         log_line("  mirror=1: every controller is published twice");
 
