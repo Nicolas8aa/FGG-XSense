@@ -10,3 +10,5 @@ build/
 *.swp
 Thumbs.db
 desktop.ini
+probe.elf
+fgg-xsense.elf.json

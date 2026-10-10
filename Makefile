@@ -23,7 +23,7 @@ CFLAGS := -std=c11 -Wall -Wextra -Werror -O2 -Isrc
 SRCS := src/main.c src/gip.c src/vpad.c src/log.c
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS))
 
-.PHONY: all clean test
+.PHONY: all clean test probe
 
 all: $(ELF)
 
@@ -37,5 +37,11 @@ $(BUILD)/%.o: %.c
 test: $(ELF)
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $^
 
+# Read-only hardware survey for the wireless backends: see tools/probe.c.
+probe: probe.elf
+
+probe.elf: $(BUILD)/tools/probe.o $(BUILD)/src/log.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 clean:
-	rm -rf $(BUILD) $(ELF)
+	rm -rf $(BUILD) $(ELF) probe.elf
