@@ -20,6 +20,12 @@
 /* Creating this file over FTP opens the pairing window. */
 #define PAIR_TRIGGER "/data/fgg-xsense/pair"
 
+/* Controllers admitted while pairing was open, one address per line. Outside
+ * the pairing window only these may associate: otherwise any device in
+ * radio range could connect and send input to the console. */
+#define KNOWN_PATH "/data/fgg-xsense/controllers.txt"
+#define KNOWN_MAX  16
+
 /* GIP messages logged in full per controller while the link is new. */
 #define DUMP_PER_CLIENT 16
 
@@ -108,6 +114,64 @@ void link_set_pairing(dlink *l, int on, const char *why)
 
 /* ---- clients ----------------------------------------------------------- */
 
+static uint8_t g_known[KNOWN_MAX][6];
+static int g_nknown = -1;   /* -1 until loaded */
+
+static void load_known(void)
+{
+    char line[64];
+    FILE *f;
+
+    g_nknown = 0;
+    f = fopen(KNOWN_PATH, "r");
+    if (!f) return;
+    while (g_nknown < KNOWN_MAX && fgets(line, sizeof line, f)) {
+        unsigned a[6];
+        int i;
+        if (sscanf(line, "%x:%x:%x:%x:%x:%x", &a[0], &a[1], &a[2], &a[3],
+                   &a[4], &a[5]) != 6)
+            continue;
+        for (i = 0; i < 6; i++) g_known[g_nknown][i] = (uint8_t)a[i];
+        g_nknown++;
+    }
+    fclose(f);
+}
+
+static int is_known(const uint8_t *addr)
+{
+    int i;
+    if (g_nknown < 0) load_known();
+    for (i = 0; i < g_nknown; i++)
+        if (memcmp(g_known[i], addr, 6) == 0) return 1;
+    return 0;
+}
+
+static void remember(const uint8_t *addr)
+{
+    FILE *f;
+    int i;
+
+    if (is_known(addr)) return;
+
+    /* The oldest entry gives way once the list is full. */
+    if (g_nknown == KNOWN_MAX) {
+        memmove(g_known[0], g_known[1], sizeof g_known[0] * (KNOWN_MAX - 1));
+        g_nknown--;
+    }
+    memcpy(g_known[g_nknown++], addr, 6);
+
+    f = fopen(KNOWN_PATH, "w");
+    if (!f) {
+        log_line("  adapter: could not save %s", KNOWN_PATH);
+        return;
+    }
+    for (i = 0; i < g_nknown; i++)
+        fprintf(f, "%02x:%02x:%02x:%02x:%02x:%02x\n", g_known[i][0],
+                g_known[i][1], g_known[i][2], g_known[i][3], g_known[i][4],
+                g_known[i][5]);
+    fclose(f);
+}
+
 static int valid_unicast(const uint8_t *a)
 {
     return !(a[0] & 0x01) && (a[0] | a[1] | a[2] | a[3] | a[4] | a[5]);
@@ -121,6 +185,15 @@ static void associate(dlink *l, const uint8_t *addr)
     for (i = 0; i < MT76_MAX_CLIENTS; i++)
         if (l->clients[i].used && memcmp(l->clients[i].addr, addr, 6) == 0)
             return;
+
+    if (!l->pairing && !is_known(addr)) {
+        l->refused++;
+        if (l->refused <= 5)
+            log_line("  adapter: refused %02x:%02x:%02x:%02x:%02x:%02x -- not "
+                     "paired with this adapter (press its button to pair)",
+                     addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+        return;
+    }
 
     for (i = 0; i < MT76_MAX_CLIENTS && !wcid; i++)
         if (!l->clients[i].used) wcid = i + 1;
@@ -141,6 +214,7 @@ static void associate(dlink *l, const uint8_t *addr)
     l->clients[wcid - 1].pad = -1;
     memcpy(l->clients[wcid - 1].addr, addr, 6);
     l->nclients++;
+    remember(addr);
     led(l);
 
     log_line("  adapter: controller %02x:%02x:%02x:%02x:%02x:%02x connected "
@@ -301,9 +375,14 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
 
         switch (p[0]) {
         case GIP_CMD_ANNOUNCE:
+            /* The vendor and product IDs sit at bytes 12-15 of an announce;
+             * a shorter one is answered all the same, just not described. */
             if (time(NULL) - c->last_init >= INIT_INTERVAL_SECONDS) {
-                log_line("  adapter: client %d announced %02X%02X:%02X%02X -- "
-                         "starting it", wcid, p[13], p[12], p[15], p[14]);
+                if (n >= 16)
+                    log_line("  adapter: client %d announced %02X%02X:%02X%02X "
+                             "-- starting it", wcid, p[13], p[12], p[15], p[14]);
+                else
+                    log_line("  adapter: client %d announced -- starting it", wcid);
                 start_client(l, wcid);
             }
             break;
