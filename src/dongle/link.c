@@ -98,7 +98,10 @@ void link_set_pairing(dlink *l, int on, const char *why)
     if (on) l->pairing_until = time(NULL) + PAIRING_SECONDS;
     if (l->pairing == on) return;
 
-    if (!mt76_radio_set_pairing(l->m, l->r, on)) {
+    /* A single failed write has been seen right after the radio came up;
+     * one retry covers it. */
+    if (!mt76_radio_set_pairing(l->m, l->r, on) &&
+        !mt76_radio_set_pairing(l->m, l->r, on)) {
         log_line("  adapter: could not %s pairing (error %d)",
                  on ? "open" : "close", l->m->err);
         return;
@@ -446,6 +449,20 @@ static void wlan_frame(dlink *l, const unsigned char *p, uint32_t len)
 
     switch (fc & FC_TYPE_MASK) {
     case FC_QOS_DATA:
+        /* After the firmware restarts in place it can still number a
+         * controller by its previous run's slot; the sender's address is
+         * what identifies it. */
+        if (wcid < 1 || wcid > MT76_MAX_CLIENTS || !l->clients[wcid - 1].used ||
+            memcmp(l->clients[wcid - 1].addr, addr2, 6) != 0) {
+            int i, found = 0;
+            for (i = 0; i < MT76_MAX_CLIENTS && !found; i++)
+                if (l->clients[i].used && memcmp(l->clients[i].addr, addr2, 6) == 0)
+                    found = i + 1;
+            if (found && !l->renumbered++)
+                log_line("  adapter: data from client %d arrives as %d -- "
+                         "matching it by address", found, wcid);
+            wcid = found;
+        }
         client_data(l, wcid, body, body_len);
         break;
     case FC_ASSOC_REQ:
