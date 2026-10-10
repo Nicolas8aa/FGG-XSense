@@ -44,6 +44,11 @@
 
 #define REPORT_SECONDS 60
 
+/* A controller silent this long after connecting is dropped so it
+ * reconnects, at most this many times in a row. */
+#define SILENT_SECONDS 10
+#define SILENT_RETRIES 3
+
 /* Microcontroller events (xone enum xone_mt76_event). */
 #define EVT_BUTTON      0x04
 #define EVT_CHANNELS    0x0a
@@ -356,6 +361,7 @@ static void client_data(dlink *l, int wcid, const unsigned char *p, uint32_t len
     }
     c = &l->clients[wcid - 1];
     c->frames++;
+    l->silent_drops = 0;
 
     if (c->dumped < DUMP_PER_CLIENT) {
         c->dumped++;
@@ -569,16 +575,22 @@ void link_tick(dlink *l, time_t now)
     static time_t last_note;
     int i;
 
-    /* A controller that associates and then stays silent is not usable;
-     * after a firmware restart in place that has been the symptom, and only
-     * a replug has cured it. Say so rather than leave it a mystery. */
+    /* A controller that associates and then stays silent is not usable.
+     * Dropping it makes it associate again from scratch, which has been seen
+     * to work where waiting did not. After a few tries in a row, the adapter
+     * itself is the likely problem, and only a replug resets that. */
     for (i = 0; i < MT76_MAX_CLIENTS; i++) {
         link_client *c = &l->clients[i];
-        if (c->used && c->frames == 0 && !c->silence_reported &&
-            now - c->connected_at >= 15) {
-            c->silence_reported = 1;
+        if (!c->used || c->frames > 0 || now - c->connected_at < SILENT_SECONDS)
+            continue;
+        if (++l->silent_drops <= SILENT_RETRIES) {
             log_line("  adapter: client %d connected but sends nothing -- "
-                     "unplug and replug the adapter", i + 1);
+                     "dropping it so it reconnects", i + 1);
+            remove_client(l, i + 1, "silent");
+        } else if (!c->silence_reported) {
+            c->silence_reported = 1;
+            log_line("  adapter: client %d still sends nothing -- unplug and "
+                     "replug the adapter", i + 1);
             notify("FGG-XSense: controller not responding - replug the adapter");
         }
     }

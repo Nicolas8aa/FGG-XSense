@@ -26,6 +26,11 @@
 #define CH_5G_LOW  1
 #define CH_5G_HIGH 2
 
+/* A channel number to use instead of choosing one (config adapter_channel). */
+static int g_forced_channel;
+
+void mt76_radio_force_channel(int channel) { g_forced_channel = channel; }
+
 static const mt76_channel g_channels[MT76_NUM_CHANNELS] = {
     { 0x01, CH_2G_LOW,  MT_PHY_BW_20, 0,               1, 0 },
     { 0x06, CH_2G_MID,  MT_PHY_BW_20, 0,               1, 0 },
@@ -283,15 +288,29 @@ static int init_channels(mt76 *m, mt76_radio *r)
 
     if (!mt76_wr(m, MT_RX_FILTR_CFG, RX_FILTER_WIDE)) return 0;
 
-    /* Pick the highest-power channel, the first one seen on a tie. */
+    /* Pick the highest-power channel, the first one seen on a tie -- among
+     * the 5 GHz channels unless told otherwise. xone takes the highest power
+     * overall, which is a 2.4 GHz channel; on a PS5 that band is shared with
+     * the console's own Bluetooth (the DualSense) and Wi-Fi, and controllers
+     * were seen dropping there once the DualSense was in use. */
     for (i = 0; i < MT76_NUM_CHANNELS; i++) {
         ch = &r->channels[i];
         if (!channel_power(m, ch) || !switch_channel(m, ch)) return 0;
-        if (ch->power > pow) {
+        if (g_forced_channel ? ch->index == g_forced_channel
+                             : ch->bandwidth != MT_PHY_BW_20 && ch->power > pow) {
             best = i;
             pow = ch->power;
         }
     }
+    if (best < 0 && g_forced_channel)
+        log_line("  radio: channel %d is not one the adapter offers -- choosing",
+                 g_forced_channel);
+    if (best < 0)
+        for (i = 0; i < MT76_NUM_CHANNELS; i++)
+            if (r->channels[i].power > pow) {
+                best = i;
+                pow = r->channels[i].power;
+            }
     r->channel = best >= 0 ? best : MT76_NUM_CHANNELS - 1;
     ch = &r->channels[r->channel];
 

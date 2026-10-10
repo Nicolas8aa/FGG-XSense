@@ -28,6 +28,10 @@ typedef struct {
     int          channel;   /* index into channels */
 } mt76_radio;
 
+/* Uses `channel` (e.g. 1, 6, 11, 36, 149) instead of choosing; 0 chooses
+ * the best 5 GHz channel. Takes effect at the next radio start. */
+void mt76_radio_force_channel(int channel);
+
 /* Returns 0 if a step failed; the log says which. */
 int mt76_radio_init(mt76 *m, mt76_radio *r);
 
