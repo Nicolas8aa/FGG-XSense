@@ -23,11 +23,6 @@ typedef enum {
 
 mt76_boot_result mt76_boot(mt76 *m, const mt76_fw *fw);
 
-/* Resets the firmware before the payload lets go of the adapter, so the next
- * start can find it cleared and take the cold path, which is reliable where
- * restarting it in place is not. Returns FCE_DMA_ADDR as it settled. */
-uint32_t mt76_firmware_release(mt76 *m);
-
 const char *mt76_boot_name(mt76_boot_result r);
 
 #endif

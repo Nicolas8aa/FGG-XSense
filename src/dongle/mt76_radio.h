@@ -36,10 +36,6 @@ void mt76_radio_force_channel(int channel);
  * firmware was restarted in place rather than uploaded afresh. */
 int mt76_radio_init(mt76 *m, mt76_radio *r, int warm);
 
-/* Stops the beacon, turns reception and transmission off and powers the
- * radio down, so the adapter is quiet before its firmware is reset. */
-void mt76_radio_shutdown(mt76 *m);
-
 /* Opens or closes the pairing window: the beacon advertises it, and the
  * receive filter is widened to let pairing requests in. */
 int mt76_radio_set_pairing(mt76 *m, mt76_radio *r, int enable);
