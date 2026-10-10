@@ -42,17 +42,61 @@ then launch **fgg xsense** from the Payload Manager page.
 
 ## Use it
 
-1. Plug the controller into the PS5 over USB
-2. Launch the payload
+1. Launch the payload (or let Payload Manager autoload it)
+2. Plug the controller into the PS5 over USB
 
 The guide LED lights and the controller works. That is the whole workflow.
 
-To stop it: **hold View + Menu together for two seconds**, or unplug the
-controller. It also stops on its own if the controller disappears for 30
-seconds.
+The payload stays resident: unplug the controller and plug it back in, or
+plug in another one, and it is picked up again within a few seconds. Up to
+four controllers are served at once, each as its own pad.
+
+To stop it: **hold View + Menu together for two seconds** on any controller,
+or create the file `/data/fgg-xsense/stop` over FTP.
 
 Your DualSense keeps working throughout — this adds a pad, it does not replace
 yours.
+
+## Wireless, with the Xbox Wireless Adapter
+
+Plug Microsoft's **Xbox Wireless Adapter for Windows** into the PS5 and
+controllers connect to it wirelessly, just as on a PC. Tested with the original
+adapter (`045E:02E6`) and an Xbox Series X|S controller on firmware 13.60; the
+slim adapter (`02FE`) and the built-in laptop ones (`02F9`, `091E`) use the
+same code with their own firmware.
+
+**The adapter needs its firmware**, which is Microsoft's and cannot be shipped
+here. Fetch it once from Windows Update with the script below, on any Mac or
+Linux machine on the same network as the console — it checks the download
+against the checksum the Linux drivers use and copies it over FTP:
+
+```sh
+tools/fetch_firmware.sh 02e6 <console-ip> 2121    # your adapter's product ID
+```
+
+It lands in `/data/fgg-xsense/firmware/`. The log names your adapter's ID if
+you are not sure which it is.
+
+**Pairing** works as on Windows: when the adapter's radio comes up, pairing is
+open for 60 seconds and its LED blinks. Hold the pair button on the controller
+until the Xbox logo flashes fast. To open pairing again later, press the button
+on the adapter, or create `/data/fgg-xsense/pair` over FTP. A controller paired
+once reconnects by itself whenever it is switched on.
+
+Only controllers that paired while the window was open may connect; they are
+remembered in `/data/fgg-xsense/controllers.txt`. Delete the file to forget
+them all.
+
+A controller remembers one Xbox host and one Bluetooth host. Using it with
+another adapter or console means pairing again, and plugging it in over USB
+switches it to the cable until it is unplugged.
+
+**Knock-off adapters** work too. The log notes it if your adapter's address is
+one shared by known clones (`62:45:b4:e7:a4:ef`); that only matters if two such
+adapters are in range of each other.
+
+If the adapter ever stops responding — the log says the firmware did not start
+— unplug it and plug it back in; the payload starts it afresh.
 
 ---
 
@@ -179,8 +223,19 @@ export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk
 make
 ```
 
-Builds at `-Wall -Wextra -Werror`. No dependencies beyond the SDK; there is
-nothing vendored and nothing fetched at build time.
+Builds at `-Wall -Wextra -Werror`. No dependencies beyond the SDK, and nothing
+is fetched at build time. `third_party/xone/mt76_defs.h` is vendored unchanged
+from [dlundqvist/xone](https://github.com/dlundqvist/xone) (GPL-2.0-or-later);
+see `third_party/xone/README.md`.
+
+```sh
+make check    # host tests: GIP decoding, translation, SHA-256, firmware parsing
+make probe    # probe.elf: a read-only survey of the console's USB devices
+```
+
+Settings, all optional, go in `/data/fgg-xsense/config.txt` as `key=value`:
+`mirror=1` publishes every controller twice (for testing several pads),
+`trace_mt76=1` logs every register access to the wireless adapter.
 
 ## Troubleshooting
 
@@ -189,6 +244,13 @@ FTP — every run is logged there, including why it gave up.
 
 **"another copy is already running".** Hold View+Menu for two seconds to stop
 the running one, or reboot if it will not respond.
+
+**"adapter found, firmware missing".** Run `tools/fetch_firmware.sh` for your
+adapter's product ID (the log names it).
+
+**A wireless controller will not connect.** Open pairing (adapter button, or
+create `/data/fgg-xsense/pair`) and hold the controller's pair button. The log
+shows every pairing request and connection.
 
 **The controller light never comes on.** Then it is not being recognised as a
 GIP device. The log names every controller it finds; if yours is not listed, it
@@ -206,6 +268,14 @@ Standing on the work of [ps5-payload-dev](https://github.com/ps5-payload-dev)
 for the SDK and `ftpsrv`, and on the Linux `xpad` driver, whose initialisation
 packets documented what a third-party GIP controller needs in order to stay
 awake.
+
+Wireless support is a port of the reverse-engineered Linux drivers for the
+Xbox Wireless Adapter by Severin von Wnuck-Lipinski —
+[xow](https://github.com/medusalix/xow) and
+[xone](https://github.com/medusalix/xone), with the fixes of
+[dlundqvist/xone](https://github.com/dlundqvist/xone) — and on the
+[mt76](https://github.com/openwrt/mt76) driver by Felix Fietkau, Lorenzo
+Bianconi and Stanislaw Gruszka.
 
 > Not affiliated with Sony Interactive Entertainment or Microsoft. For use with
 > homebrew on consoles you own.
