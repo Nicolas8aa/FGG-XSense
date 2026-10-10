@@ -2,8 +2,9 @@
  *
  * Cold (nothing loaded since the adapter was powered): the image is uploaded
  * and started. Warm (firmware already running, e.g. the payload restarted):
- * it is only reset, as xone does. Either way the chip may briefly drop off the
- * bus as the firmware starts; that is reported, not treated as a failure.
+ * it is reset first, then uploaded and started the same way, as xow does.
+ * Either way the chip may briefly drop off the bus as the firmware starts;
+ * that is reported, not treated as a failure.
  */
 #ifndef FGG_MT76_BOOT_H
 #define FGG_MT76_BOOT_H
@@ -13,7 +14,7 @@
 
 typedef enum {
     MT76_BOOT_COLD,      /* uploaded and started */
-    MT76_BOOT_WARM,      /* was already running; reset */
+    MT76_BOOT_WARM,      /* was already running; reset and re-uploaded */
     MT76_BOOT_GONE,      /* left the bus while starting: reopen and retry */
     MT76_BOOT_FAILED,
 } mt76_boot_result;

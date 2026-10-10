@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Ported from dlundqvist/xone transport/mt76.c (xone_mt76_load_firmware and
- * helpers), (c) Severin von Wnuck-Lipinski, GPL-2.0-or-later. */
+ * helpers) and medusalix/xow dongle/mt76.cpp (Mt76::loadFirmware),
+ * (c) Severin von Wnuck-Lipinski, GPL-2.0-or-later. */
 #include "dongle/mt76_boot.h"
 #include "log.h"
 
@@ -68,24 +69,30 @@ static int send_part(mt76 *m, uint32_t offset, const unsigned char *data,
     return 1;
 }
 
-static mt76_boot_result warm(mt76 *m)
+static mt76_boot_result cold(mt76 *m, const mt76_fw *fw);
+
+/* Firmware already running: reset it and upload it again, as xow does.
+ *
+ * xone instead restarts the running firmware in place and waits for bit 31
+ * of FCE_DMA_ADDR, but on a 02E6 adapter on this console that bit never
+ * appears (the register stays at 1). A full reset and upload takes under a
+ * second and always ends in the same state as a cold start. */
+static mt76_boot_result warm(mt76 *m, const mt76_fw *fw)
 {
+    mt76_boot_result r;
     uint32_t last = 0;
 
     if (!rf_patch(m)) return fail(m, "RF patch");
-    if (!mt76_dev_mode(m, DEV_MODE_LOAD_IVB)) return fail(m, "firmware reset");
+    if (!mt76_dev_mode(m, DEV_MODE_RESET)) return fail(m, "firmware reset");
 
-    if (!mt76_poll(m, CFG(MT_FCE_DMA_ADDR), 0x80000000, 0x80000000, &last)) {
-        if (mt76_gone(m)) return fail(m, "firmware reset");
-        log_line("  adapter: firmware reset not confirmed (FCE_DMA_ADDR %08X)",
-                 (unsigned)last);
-        return MT76_BOOT_FAILED;
-    }
+    /* xow only waits for the register to stop reading 0x80000000; logging
+     * what it settles at tells whether the reset really cleared it. */
+    mt76_poll(m, CFG(MT_FCE_DMA_ADDR), 0xFFFFFFFF, 0, &last);
+    if (mt76_gone(m)) return fail(m, "firmware reset");
+    log_line("  adapter: after reset FCE_DMA_ADDR %08X", (unsigned)last);
 
-    /* The microcontroller needs time after a reset before it takes bulk
-     * commands; without this the radio set-up times out. */
-    usleep(START_SETTLE_US);
-    return MT76_BOOT_WARM;
+    r = cold(m, fw);
+    return r == MT76_BOOT_COLD ? MT76_BOOT_WARM : r;
 }
 
 static mt76_boot_result cold(mt76 *m, const mt76_fw *fw)
@@ -134,14 +141,14 @@ mt76_boot_result mt76_boot(mt76 *m, const mt76_fw *fw)
              state ? "firmware already running, resetting it" :
                      "no firmware, uploading");
 
-    return state ? warm(m) : cold(m, fw);
+    return state ? warm(m, fw) : cold(m, fw);
 }
 
 const char *mt76_boot_name(mt76_boot_result r)
 {
     switch (r) {
     case MT76_BOOT_COLD:   return "cold start: firmware uploaded and running";
-    case MT76_BOOT_WARM:   return "warm start: firmware reset and running";
+    case MT76_BOOT_WARM:   return "warm start: firmware reset, re-uploaded and running";
     case MT76_BOOT_GONE:   return "left the bus";
     case MT76_BOOT_FAILED: return "failed";
     }
