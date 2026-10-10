@@ -22,14 +22,20 @@ void pads_set_mirror(int on);
  * Returns its slot, or -1 if no virtual pad could be registered. */
 int pads_attach(const char *source, const char *id);
 
+/* Records the controller's battery reading (GIP level and type). The first
+ * one is named in the "controller ready" notice; a later change to low
+ * raises a notice of its own. */
+void pads_battery(int slot, int level, int type);
+
 /* Publishes the controller's latest state. Returns 1 if it was delivered. */
 int pads_update(int slot, const pad_state *state);
 
 /* Removes the controller and its virtual pad. */
 void pads_detach(int slot);
 
-/* Called regularly by the main loop. Returns 1 once View+Menu has been held
- * on any controller long enough to stop the payload. */
+/* Called regularly by the main loop: gives the "controller ready" notices.
+ * Returns 1 once View+Menu has been held on any controller long enough to
+ * stop the payload. */
 int pads_tick(time_t now);
 
 int pads_count(void);

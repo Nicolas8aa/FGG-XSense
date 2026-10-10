@@ -248,14 +248,21 @@ make probe    # probe.elf: a read-only survey of the console's USB devices
 ```
 
 Settings, all optional, go in `/data/fgg-xsense/config.txt` as `key=value`:
-`mirror=1` publishes every controller twice (for testing several pads),
-`trace_mt76=1` logs every register access to the wireless adapter, and
-`ps_button=1` enables the experimental Xbox Guide-to-PS route described above.
+
+- `idle_off_minutes=N` switches a wireless controller off after N minutes
+  untouched (default 15; `0` never does). A cabled one stays on.
+- `adapter_channel=N` puts the adapter's radio on channel N instead of 36.
+- `ps_button=1` enables the experimental Xbox Guide-to-PS route described above.
+- `mirror=1` publishes every controller twice (for testing several pads).
+- `trace_gip=1` logs each controller's first messages and button changes,
+  `trace_mt76=1` every register access to the wireless adapter, and
+  `trace_klog=1` the system log read while the PS-button route sets up a pad.
 
 ## Troubleshooting
 
 **Nothing happens when I launch it.** Check `/data/fgg-xsense/xsense.log` over
-FTP — every run is logged there, including why it gave up.
+FTP — every run is logged there, including why it gave up. Each run starts it
+afresh; the run before is kept as `xsense.old.log`.
 
 **"another copy is already running".** Hold View+Menu for two seconds to stop
 the running one, or reboot if it will not respond.

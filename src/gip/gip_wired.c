@@ -182,17 +182,14 @@ static void acknowledge(wired *w, const unsigned char *msg)
     send_msg(w, ack, gip_build_ack(ack, (int)sizeof ack, msg));
 }
 
-static void report_battery(wired *w, const unsigned char *msg, int n)
+static void report_battery(wired *w, int pad, const unsigned char *msg, int n)
 {
     int level, type;
 
     if (!gip_decode_battery(msg, n, &level, &type) ||
         (level == w->battery_level && type == w->battery_type))
         return;
-    /* Once, as the batteries become low -- not on every report after. */
-    if (gip_battery_is_low(level, type) &&
-        !gip_battery_is_low(w->battery_level, w->battery_type))
-        notify("FGG-XSense: Xbox controller battery low");
+    pads_battery(pad, level, type);
     w->battery_level = level;
     w->battery_type = type;
     log_line("  %s: battery %s (%s)", w->node, gip_battery_level_name(level),
@@ -308,7 +305,7 @@ static void serve(wired *w, int pad, stats *st)
                 last = state;
                 if (pads_update(pad, &state)) st->delivered++;
             } else if (msg[0] == GIP_CMD_STATUS) {
-                report_battery(w, msg, n);
+                report_battery(w, pad, msg, n);
             } else if (gip_decode_guide(msg, n, &guide)) {
                 /* The guide button comes in a message of its own; it rides
                  * along with the last input as the PS button. */

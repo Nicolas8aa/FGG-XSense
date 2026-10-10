@@ -166,6 +166,7 @@ int main(void)
     pads_set_mirror(config_int("mirror", 0));
     dongle_set_trace(config_int("trace_mt76", 0));
     link_set_trace(config_int("trace_gip", 0));
+    link_set_idle_off(config_int("idle_off_minutes", 15));
     vpad_sce_set_trace(config_int("trace_klog", 0));
     mt76_radio_force_channel(config_int("adapter_channel", 0));
     if (config_int("mirror", 0))

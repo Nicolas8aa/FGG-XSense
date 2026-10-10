@@ -1,4 +1,5 @@
 #include "pads.h"
+#include "gip/gip_proto.h"
 #include "log.h"
 #include "vpad.h"
 
@@ -14,12 +15,19 @@
  * is playing instead, but the field must hold something. */
 #define VPAD_USER 1
 
+/* A controller reports its battery just after it starts. The "controller
+ * ready" notice waits this long for it, so it can say the level. */
+#define READY_WAIT_SECONDS 2
+
 typedef struct {
     int      used;
     char     name[48];
     vpad    *pad, *mirror;
     uint32_t buttons;
     long     delivered, failed;
+    time_t   attached_at;
+    int      announced;              /* "controller ready" notice given */
+    int      battery_level, battery_type;   /* -1 until reported */
 } slot;
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -66,11 +74,44 @@ int pads_attach(const char *source, const char *id)
     }
 
     g_slots[n].used = 1;
-    notify("FGG-XSense: controller ready - hold View+Menu to stop");
+    g_slots[n].attached_at = time(NULL);
+    g_slots[n].battery_level = g_slots[n].battery_type = -1;
 
 out:
     pthread_mutex_unlock(&g_lock);
     return n;
+}
+
+void pads_battery(int n, int level, int type)
+{
+    slot *s;
+
+    if (n < 0 || n >= PADS_MAX) return;
+    pthread_mutex_lock(&g_lock);
+    s = &g_slots[n];
+    if (s->used) {
+        /* Once, as the batteries become low -- not on every report after,
+         * nor again when a controller reconnects still low. Before the ready
+         * notice, that notice says it instead. */
+        if (s->announced && gip_battery_is_low(level, type) &&
+            !gip_battery_is_low(s->battery_level, s->battery_type))
+            notify("FGG-XSense: Xbox controller battery low");
+        s->battery_level = level;
+        s->battery_type = type;
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
+static void announce(slot *s)
+{
+    s->announced = 1;
+    if (s->battery_level < 0)
+        notify("FGG-XSense: controller ready - hold View+Menu to stop");
+    else if (s->battery_type == 0)
+        notify("FGG-XSense: controller ready, charging - hold View+Menu to stop");
+    else
+        notify("FGG-XSense: controller ready, battery %s - hold View+Menu to stop",
+               gip_battery_level_name(s->battery_level));
 }
 
 int pads_update(int n, const pad_state *state)
@@ -106,6 +147,12 @@ int pads_tick(time_t now)
     int i, held = 0, quit = 0;
 
     pthread_mutex_lock(&g_lock);
+
+    for (i = 0; i < PADS_MAX; i++)
+        if (g_slots[i].used && !g_slots[i].announced &&
+            (g_slots[i].battery_level >= 0 ||
+             now - g_slots[i].attached_at >= READY_WAIT_SECONDS))
+            announce(&g_slots[i]);
 
     /* Judged from the last state each controller sent, not from reports as
      * they arrive: a controller reports changes, so a combination held
