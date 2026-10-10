@@ -78,14 +78,14 @@ _Static_assert(offsetof(ScePadData, timestamp) == 80, "timestamp offset");
 /* How long to wait for the kernel log to name the new device. */
 #define IDENTIFY_MS 3000
 
-/* AddDevice answers this while the console's "who is using this controller"
- * screen is waiting for an account to be chosen -- a screen the call itself
- * brings up. It is retried, as YetAnotherControllerEnabler does, until the
- * choice is made; giving up and making a pad some other way meanwhile left
- * the console's controller handling stuck until a restart. */
-#define ADD_PENDING      0x803B0006
-#define ADD_RETRY_MS     2000
-#define ADD_PENDING_MAX  60000
+/* AddDevice answers this when it has created the device but the console has
+ * yet to assign it to a user: it brings up the "who is using this
+ * controller" screen for it. The device exists all the same -- every call
+ * creates one, so the call must never be repeated: retrying it on this code
+ * filled the console with virtual pads until it refused more (0x803B0003)
+ * and its login screen broke. Binding the device to the user over MBus is
+ * what settles the assignment. */
+#define ADD_PENDING 0x803B0006
 
 /* ---- system interfaces, all resolved at runtime ------------------------- */
 
@@ -117,6 +117,10 @@ static uint64_t g_orig_authid;
 static uint8_t  g_orig_caps[16];
 static int      g_raised;
 static int      g_ready;
+
+/* Set after the first failure to add a pad: every AddDevice creates a
+ * device, so after one goes wrong no further call is made this session. */
+static int      g_failed;
 
 /* Identification reads the kernel log, which has one reader at a time. */
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -340,6 +344,11 @@ int32_t vpad_sce_add(char *why, int whylen)
         snprintf(why, (size_t)whylen, "Sony's pad library not in use");
         return -1;
     }
+    if (g_failed) {
+        snprintf(why, (size_t)whylen, "off after an earlier failure -- stop the payload "
+                 "and set ps_button=0");
+        return -1;
+    }
     user = main_user();
     if (user == -1) {
         snprintf(why, (size_t)whylen, "nobody signed in");
@@ -365,28 +374,7 @@ int32_t vpad_sce_add(char *why, int whylen)
     log_line("  vpad: AddDevice %#x, block %08x %08x %08x %08x %08x %08x", (unsigned)r,
              (unsigned)param[2], (unsigned)param[3], (unsigned)param[4],
              (unsigned)param[5], (unsigned)param[6], (unsigned)param[7]);
-    if (r == (int32_t)ADD_PENDING) {
-        long since = now_ms();
-        notify("FGG-XSense: choose who is using the new controller");
-        while (r == (int32_t)ADD_PENDING && now_ms() - since < ADD_PENDING_MAX) {
-            long t = now_ms();
-            uint64_t d = 0;
-            while (now_ms() - t < ADD_RETRY_MS) {
-                /* The device may already be named while the choice is
-                 * pending; keep everything the log says. */
-                int n = read_log(fd, line, &len, sizeof line, &d, 1);
-                if (n > 0 && !found) {
-                    dev = d;
-                    found = n;
-                }
-                usleep(50000);
-            }
-            r = p_add(param, VIRTUAL_DEVICE_DUALSENSE);
-            log_line("  vpad: AddDevice again after %ld ms: %#x", now_ms() - since,
-                     (unsigned)r);
-        }
-    }
-    if (r != 0) {
+    if (r != 0 && r != (int32_t)ADD_PENDING) {
         snprintf(why, (size_t)whylen, "AddDevice %#x", (unsigned)r);
         close(fd);
         goto out;
@@ -430,6 +418,10 @@ int32_t vpad_sce_add(char *why, int whylen)
              (unsigned long long)dev, (unsigned)user);
 
 out:
+    if (handle < 0) {
+        g_failed = 1;
+        notify("FGG-XSense: PS button route failed - stop the payload, set ps_button=0");
+    }
     pthread_mutex_unlock(&g_lock);
     return handle;
 }
