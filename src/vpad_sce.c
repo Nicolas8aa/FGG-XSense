@@ -3,7 +3,9 @@
  * (X-F1REBALL-X, AngelLopezTorres), GPL-3.0-or-later. */
 #include "vpad_sce.h"
 #include "log.h"
+#include "vpad.h"
 
+#include <sys/ioctl.h>
 #include <sys/types.h>
 
 #include <ctype.h>
@@ -436,11 +438,59 @@ static uint8_t axis_inv(int16_t v) { return (uint8_t)((32767 - (int)v) >> 8); }
 
 int vpad_sce_ready(void) { return g_ready; }
 
+/* ---- diagnostics: why InsertData refuses ------------------------------- */
+
+#define HID_INSERT_DATA 0x8018482CUL
+#define DIAG_DETAILED   5
+#define DIAG_GIVE_UP    30
+
+typedef struct {
+    uint32_t cmd;
+    uint32_t reserved;
+    void    *data;
+    void    *out;
+} hid_req;
+
+static int g_insert_fails;
+
+/* Logs Sony's error code and whether the same device takes the same input
+ * through the direct kernel call. After DIAG_GIVE_UP refusals in a row the
+ * payload is stopped, so the controller is not left dead. */
+static void diag_insert_failure(int32_t handle, const pad_state *s, int32_t r)
+{
+    g_insert_fails++;
+    if (g_insert_fails <= DIAG_DETAILED) {
+        unsigned char report[VPAD_REPORT_SIZE];
+        hid_req req;
+        int fd = open("/dev/hid", O_RDWR), direct = -1, e = 0;
+
+        vpad_translate(s, report);
+        if (fd >= 0) {
+            memset(&req, 0, sizeof req);
+            req.cmd = (uint32_t)handle;
+            req.data = report;
+            direct = ioctl(fd, HID_INSERT_DATA, &req);
+            e = direct ? errno : 0;
+            close(fd);
+        }
+        log_line("  vpad diag: InsertData(%#x) -> %#x; direct insert into the same "
+                 "device -> %s", (unsigned)handle, (unsigned)r,
+                 direct == 0 ? "accepted" : fd < 0 ? "no /dev/hid" : strerror(e));
+    }
+    if (g_insert_fails == DIAG_GIVE_UP) {
+        FILE *f = fopen("/data/fgg-xsense/stop", "w");
+        if (f) fclose(f);
+        log_line("  vpad diag: %d refusals in a row -- stopping the payload", DIAG_GIVE_UP);
+        notify("FGG-XSense: PS button diagnostics done - payload stopped");
+    }
+}
+
 int vpad_sce_insert(int32_t handle, const pad_state *s)
 {
     ScePadData d;
     struct timespec ts;
     uint32_t m = s->buttons, b = 0;
+    int32_t r;
 
     memset(&d, 0, sizeof d);
 
@@ -476,7 +526,13 @@ int vpad_sce_insert(int32_t handle, const pad_state *s)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     d.timestamp = (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
 
-    return p_insert(handle, &d) == 0;
+    r = p_insert(handle, &d);
+    if (r == 0) {
+        g_insert_fails = 0;
+        return 1;
+    }
+    diag_insert_failure(handle, s, r);
+    return 0;
 }
 
 void vpad_sce_delete(int32_t handle)
