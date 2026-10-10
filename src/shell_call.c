@@ -3,6 +3,7 @@
  * (find_pid, pt_io, resolve_sym, code_cave, pt_call3, call_remote),
  * GPL-3.0-or-later. */
 #include "shell_call.h"
+#include "log.h"
 
 #include <machine/reg.h>
 #include <ps5/kernel.h>
@@ -15,6 +16,7 @@
 #include <sys/wait.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -246,6 +248,343 @@ int shellui_press_ps(int32_t handle, const void *data, size_t len)
 
 restore:
     pt_io(pid, PIOD_WRITE_D, trap, &original, 1);
+detach:
+    sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+    return result;
+}
+
+/* ---- read-only ShellUI pad-information probe --------------------------- */
+
+#define SHELL_PAD_INFO_BYTES 256
+
+static void shell_dump_info(const char *what, const unsigned char *data, unsigned n)
+{
+    char line[3 * 16 + 1];
+    unsigned i, offset;
+
+    for (offset = 0; offset < n; offset += 16) {
+        unsigned len = n - offset < 16 ? n - offset : 16;
+        for (i = 0; i < len; i++)
+            snprintf(line + 3 * i, 4, "%02X ", data[offset + i]);
+        line[3 * len] = '\0';
+        log_line("    ShellUI pad info %s +%02x: %s", what, offset, line);
+    }
+}
+
+void shellui_pad_info_probe(const int32_t users[4], int32_t known_handle)
+{
+    uint8_t original = 0x90, breakpoint = 0xcc;
+    unsigned char data[SHELL_PAD_INFO_BYTES];
+    int32_t candidates[7] = { -1, -1, -1, -1, -1, 1, 0x10000000 };
+    intptr_t get_handle, info, ext_info, trap, data_addr;
+    struct reg regs;
+    pid_t pid;
+    int i, j, count = 0, type, index, ok;
+
+    if (users) {
+        for (i = 0; i < 4; i++) {
+            if (users[i] < 0) continue;
+            for (j = 0; j < count && candidates[j] != users[i]; j++) {}
+            if (j == count) candidates[count++] = users[i];
+        }
+    }
+    for (i = 4; i < 7; i++) {
+        for (j = 0; j < count && candidates[j] != candidates[i]; j++) {}
+        if (j == count) candidates[count++] = candidates[i];
+    }
+    pid = find_pid("SceShellUI");
+    if (pid < 0) {
+        log_line("  vpad diag: ShellUI pad probe: SceShellUI not found");
+        return;
+    }
+    if (sys_ptrace(PT_ATTACH, pid, 0, 0) != 0) {
+        log_line("  vpad diag: ShellUI pad probe: could not attach");
+        return;
+    }
+    if (waitpid(pid, NULL, 0) < 0) {
+        log_line("  vpad diag: ShellUI pad probe: attach wait failed");
+        sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+        return;
+    }
+    get_handle = resolve_sym(pid, "libScePad", "scePadGetHandle");
+    info = resolve_sym(pid, "libScePad", "scePadGetControllerInformation");
+    ext_info = resolve_sym(pid, "libScePad", "scePadGetExtControllerInformation");
+    trap = code_cave(pid, "libScePad");
+    if (!get_handle || !info || !ext_info || !trap ||
+        sys_ptrace(PT_GETREGS, pid, (caddr_t)&regs, 0) != 0) {
+        log_line("  vpad diag: ShellUI pad probe: required Pad exports unavailable");
+        goto detach;
+    }
+    kernel_set_vmem_protection(pid, trap, 16, PROT_READ | PROT_WRITE | PROT_EXEC);
+    if (pt_io(pid, PIOD_READ_D, trap, &original, 1) != 0 ||
+        pt_io(pid, PIOD_WRITE_D, trap, &breakpoint, 1) != 0) {
+        log_line("  vpad diag: ShellUI pad probe: could not set temporary trap");
+        goto detach;
+    }
+
+    /* Keep output clear of each remote call frame and the ABI red zone. */
+    data_addr = (regs.r_rsp - 4096) & ~(intptr_t)0xf;
+    log_line("  vpad diag: ShellUI public pad-information probe begins (read-only)");
+    if (known_handle > 0) {
+        unsigned char basic[SHELL_PAD_INFO_BYTES];
+        int32_t r1, r2;
+
+        memset(data, 0xA5, sizeof data);
+        if (pt_io(pid, PIOD_WRITE_D, data_addr, data, sizeof data) == 0) {
+            r1 = (int32_t)pt_call3(pid, info, trap, (uint64_t)(uint32_t)known_handle,
+                                   (uint64_t)data_addr, 0, &ok);
+            if (ok && r1 == 0 &&
+                pt_io(pid, PIOD_READ_D, data_addr, basic, sizeof basic) != 0)
+                r1 = -1;
+            memset(data, 0xA5, sizeof data);
+            if (pt_io(pid, PIOD_WRITE_D, data_addr, data, sizeof data) == 0) {
+                r2 = (int32_t)pt_call3(pid, ext_info, trap,
+                                       (uint64_t)(uint32_t)known_handle,
+                                       (uint64_t)data_addr, 0, &ok);
+                if (!ok) r2 = -1;
+                log_line("  vpad diag: ShellUI known handle %#x -> info %#x ext %#x",
+                         (unsigned)known_handle, (unsigned)r1, (unsigned)r2);
+                if (r1 == 0) shell_dump_info("info", basic, 64);
+                if (r2 == 0 &&
+                    pt_io(pid, PIOD_READ_D, data_addr, data, sizeof data) == 0)
+                    shell_dump_info("ext ", data, 96);
+            }
+        }
+    }
+    /* One-shot probes provide an exact PSS/CIM handle.  Do not fall back to
+     * port enumeration there: some unavailable ports take the full remote
+     * call timeout and provide no additional read-only information. */
+    if (!users) goto complete;
+    for (i = 0; i < count; i++) {
+        for (type = 0; type <= 3; type++) {
+            for (index = 0; index < 4; index++) {
+                unsigned char basic[SHELL_PAD_INFO_BYTES];
+                int32_t handle, r1, r2;
+
+                handle = (int32_t)pt_call3(pid, get_handle, trap,
+                                            (uint64_t)(uint32_t)users[i],
+                                            (uint64_t)(uint32_t)type,
+                                            (uint64_t)(uint32_t)index, &ok);
+                if (!ok || handle <= 0) continue;
+                memset(data, 0xA5, sizeof data);
+                if (pt_io(pid, PIOD_WRITE_D, data_addr, data, sizeof data) != 0) continue;
+                r1 = (int32_t)pt_call3(pid, info, trap, (uint64_t)(uint32_t)handle,
+                                       (uint64_t)data_addr, 0, &ok);
+                if (!ok) continue;
+                if (r1 == 0 && pt_io(pid, PIOD_READ_D, data_addr, basic, sizeof basic) != 0)
+                    r1 = -1;
+                memset(data, 0xA5, sizeof data);
+                if (pt_io(pid, PIOD_WRITE_D, data_addr, data, sizeof data) != 0) continue;
+                r2 = (int32_t)pt_call3(pid, ext_info, trap, (uint64_t)(uint32_t)handle,
+                                       (uint64_t)data_addr, 0, &ok);
+                if (!ok) continue;
+                log_line("  vpad diag: ShellUI user %#x type %d index %d handle %#x -> "
+                         "info %#x ext %#x", (unsigned)users[i], type, index,
+                         (unsigned)handle, (unsigned)r1, (unsigned)r2);
+                if (r1 == 0) shell_dump_info("info", basic, 64);
+                if (r2 == 0 && pt_io(pid, PIOD_READ_D, data_addr, data, sizeof data) == 0)
+                    shell_dump_info("ext ", data, 96);
+            }
+        }
+    }
+complete:
+    log_line("  vpad diag: ShellUI public pad-information probe complete");
+    pt_io(pid, PIOD_WRITE_D, trap, &original, 1);
+detach:
+    sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+}
+
+/* ---- static libScePad inspection --------------------------------------- */
+
+#define PAD_ADD_CODE_BYTES 8192
+#define PAD_ADD_CODE_CHUNK 256
+#define MBUS_SET_CODE_BYTES 32768
+
+int shellui_dump_pad_adddevice_code(const char *path)
+{
+    unsigned char code[PAD_ADD_CODE_BYTES];
+    intptr_t fn;
+    pid_t pid;
+    int fd, result = -1;
+    size_t offset;
+
+    if (!path || !*path) return -1;
+    pid = find_pid("SceShellUI");
+    if (pid < 0) return -2;
+    if (sys_ptrace(PT_ATTACH, pid, 0, 0) != 0) return -3;
+    if (waitpid(pid, NULL, 0) < 0) {
+        sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+        return -4;
+    }
+    fn = resolve_sym(pid, "libScePad", "scePadVirtualDeviceAddDevice");
+    if (!fn) {
+        log_line("  vpad diag: AddDevice export unavailable in ShellUI");
+        goto detach;
+    }
+    for (offset = 0; offset < sizeof code; offset += PAD_ADD_CODE_CHUNK) {
+        if (pt_io(pid, PIOD_READ_D, fn + (intptr_t)offset, code + offset,
+                  PAD_ADD_CODE_CHUNK) != 0) {
+            log_line("  vpad diag: could not read AddDevice code at +%#x (errno %d)",
+                     (unsigned)offset, errno);
+            goto detach;
+        }
+    }
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) goto detach;
+    for (offset = 0; offset < sizeof code;) {
+        ssize_t n = write(fd, code + offset, sizeof code - offset);
+        if (n <= 0) break;
+        offset += (size_t)n;
+    }
+    close(fd);
+    if (offset == sizeof code) {
+        log_line("  vpad diag: copied %u code bytes from ShellUI libScePad AddDevice at %#llx",
+                 (unsigned)sizeof code, (unsigned long long)fn);
+        result = 0;
+    }
+detach:
+    sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+    return result;
+}
+
+int shellui_mbus_symbol_probe(void)
+{
+    static const char *const names[] = {
+        "sceMbusGetDeviceStatus",
+        "sceMbusSetDeviceStatus",
+        "sceMbusGetDeviceFunctionState",
+        "sceMbusSetDeviceFunctionState",
+        "sceMbusGetFunctionState",
+        "sceMbusSetFunctionState",
+        "sceMbusGetDeviceInfo",
+        "sceMbusUpdateDeviceStatus",
+        "sceMbusSetDeviceBatteryState",
+    };
+    pid_t pid;
+    unsigned i, found = 0;
+
+    pid = find_pid("SceShellUI");
+    if (pid < 0) return -1;
+    log_line("  vpad diag: ShellUI MBus symbol survey (read-only)");
+    for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+        intptr_t address = resolve_sym(pid, "libSceMbus", names[i]);
+        if (address) {
+            log_line("    %s = %#llx", names[i], (unsigned long long)address);
+            found++;
+        }
+    }
+    log_line("  vpad diag: ShellUI MBus symbol survey found %u candidate(s)", found);
+    return (int)found;
+}
+
+int shellui_dump_mbus_setfunction_code(const char *path)
+{
+    unsigned char code[MBUS_SET_CODE_BYTES];
+    intptr_t fn;
+    pid_t pid;
+    int fd, result = -1;
+    size_t offset;
+
+    if (!path || !*path) return -1;
+    pid = find_pid("SceShellUI");
+    if (pid < 0) return -2;
+    if (sys_ptrace(PT_ATTACH, pid, 0, 0) != 0) return -3;
+    if (waitpid(pid, NULL, 0) < 0) {
+        sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+        return -4;
+    }
+    fn = resolve_sym(pid, "libSceMbus", "sceMbusSetDeviceFunctionState");
+    if (!fn) {
+        log_line("  vpad diag: MBus device-function setter export unavailable");
+        goto detach;
+    }
+    for (offset = 0; offset < sizeof code; offset += PAD_ADD_CODE_CHUNK)
+        if (kernel_proc_copyout(pid, fn + (intptr_t)offset, code + offset,
+                                PAD_ADD_CODE_CHUNK) != 0) {
+            log_line("  vpad diag: could not read MBus setter code at +%#x (errno %d)",
+                     (unsigned)offset, errno);
+            goto detach;
+        }
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) goto detach;
+    for (offset = 0; offset < sizeof code;) {
+        ssize_t n = write(fd, code + offset, sizeof code - offset);
+        if (n <= 0) break;
+        offset += (size_t)n;
+    }
+    close(fd);
+    if (offset == sizeof code) {
+        log_line("  vpad diag: copied %u code bytes from ShellUI MBus SetDeviceFunctionState at %#llx",
+                 (unsigned)sizeof code, (unsigned long long)fn);
+        result = 0;
+    }
+detach:
+    sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+    return result;
+}
+
+int shellui_capture_mbus_setfunction_request(void)
+{
+    enum { REQUEST_BYTES = 128, WAIT_MS = 60000 };
+    uint8_t original, breakpoint = 0xcc;
+    unsigned char request[REQUEST_BYTES];
+    intptr_t fn;
+    struct reg regs;
+    pid_t pid;
+    int old_prot, status, waited, result = -1;
+
+    pid = find_pid("SceShellUI");
+    if (pid < 0) return -1;
+    if (sys_ptrace(PT_ATTACH, pid, 0, 0) != 0) return -2;
+    if (waitpid(pid, NULL, 0) < 0) {
+        sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
+        return -3;
+    }
+    fn = resolve_sym(pid, "libSceMbus", "sceMbusSetDeviceFunctionState");
+    if (!fn) goto detach;
+    old_prot = kernel_get_vmem_protection(pid, fn, 1);
+    if (old_prot < 0 || kernel_set_vmem_protection(pid, fn, 1,
+                                                    PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
+        goto detach;
+    original = kernel_proc_getchar(pid, fn);
+    if (kernel_proc_setchar(pid, fn, (char)breakpoint) != 0) {
+        kernel_set_vmem_protection(pid, fn, 1, old_prot);
+        goto detach;
+    }
+    if (sys_ptrace(PT_CONTINUE, pid, (caddr_t)1, 0) != 0) goto restore;
+    for (waited = 0; waited < WAIT_MS; waited++) {
+        int got = waitpid(pid, &status, WNOHANG);
+        if (got < 0) goto restore;
+        if (got == 0) {
+            usleep(1000);
+            continue;
+        }
+        if (!WIFSTOPPED(status)) goto restore;
+        if (WSTOPSIG(status) != SIGTRAP) {
+            sys_ptrace(PT_CONTINUE, pid, (caddr_t)1,
+                       WSTOPSIG(status) == SIGCHLD ? 0 : WSTOPSIG(status));
+            continue;
+        }
+        if (sys_ptrace(PT_GETREGS, pid, (caddr_t)&regs, 0) != 0) goto restore;
+        if (kernel_proc_copyout(pid, (intptr_t)regs.r_rdi, request, sizeof request) != 0)
+            goto restore;
+        log_line("  vpad diag: intercepted normal MBus function request at %#llx",
+                 (unsigned long long)regs.r_rdi);
+        shell_dump_info("MBus request", request, sizeof request);
+        regs.r_rip = fn; /* re-execute the original first instruction */
+        if (kernel_proc_setchar(pid, fn, (char)original) != 0 ||
+            sys_ptrace(PT_SETREGS, pid, (caddr_t)&regs, 0) != 0)
+            goto restore_prot;
+        kernel_set_vmem_protection(pid, fn, 1, old_prot);
+        result = 0;
+        goto detach;
+    }
+    log_line("  vpad diag: no MBus device-function call arrived in %u seconds",
+             (unsigned)(WAIT_MS / 1000));
+restore:
+    kernel_proc_setchar(pid, fn, (char)original);
+restore_prot:
+    kernel_set_vmem_protection(pid, fn, 1, old_prot);
 detach:
     sys_ptrace(PT_DETACH, pid, (caddr_t)1, 0);
     return result;

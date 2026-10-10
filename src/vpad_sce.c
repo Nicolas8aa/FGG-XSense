@@ -99,12 +99,20 @@ typedef int32_t (*fn_add)(void *, int32_t);
 typedef int32_t (*fn_insert)(int32_t, const void *);
 typedef int32_t (*fn_bind)(uint64_t, int32_t);
 typedef int32_t (*fn_users)(int32_t *);
+typedef int32_t (*fn_handle)(int32_t, int32_t, int32_t);
+typedef int32_t (*fn_open)(int32_t, int32_t, int32_t, void *);
+typedef int32_t (*fn_close)(int32_t);
+typedef int32_t (*fn_info)(int32_t, void *);
 
 static fn_add    p_add;
 static fn_insert p_insert;
 static fn_i32    p_delete;
 static fn_bind   p_bind;
 static fn_users  p_login_list, p_initial_user, p_foreground_user;
+static fn_handle p_get_handle;
+static fn_open   p_open;
+static fn_close  p_close;
+static fn_info   p_info, p_ext_info;
 
 /* From the payload SDK. */
 uint64_t kernel_get_ucred_authid(pid_t pid);
@@ -121,6 +129,8 @@ static uint64_t g_orig_authid;
 static uint8_t  g_orig_caps[16];
 static int      g_raised;
 static int      g_ready;
+static int      g_info_probe;
+static int      g_shellui_info_probe;
 
 /* Set after the first failure to add a pad: every AddDevice creates a
  * device, so after one goes wrong no further call is made this session. */
@@ -228,6 +238,11 @@ int vpad_sce_init(void)
     p_add             = (fn_add)sym(pad, "scePadVirtualDeviceAddDevice", &missing);
     p_insert          = (fn_insert)sym(pad, "scePadVirtualDeviceInsertData", &missing);
     p_delete          = (fn_i32)sym(pad, "scePadVirtualDeviceDeleteDevice", &missing);
+    p_get_handle      = (fn_handle)sym(pad, "scePadGetHandle", &missing);
+    p_open            = (fn_open)sym(pad, "scePadOpen", &missing);
+    p_close           = (fn_close)sym(pad, "scePadClose", &missing);
+    p_info            = (fn_info)sym(pad, "scePadGetControllerInformation", &missing);
+    p_ext_info        = (fn_info)sym(pad, "scePadGetExtControllerInformation", &missing);
     if (missing) {
         vpad_sce_shutdown();
         return 0;
@@ -268,6 +283,78 @@ static int32_t main_user(void)
     for (i = 0; i < 4; i++) if (fore != -1 && login[i] == fore) return fore;
     for (i = 0; i < 4; i++) if (login[i] != -1 && login[i] != 0) return login[i];
     return -1;
+}
+
+/* ---- optional read-only controller-information probe -------------------- */
+
+#define PAD_INFO_BYTES 256
+
+static void diag_dump_info(const char *what, const unsigned char *data, unsigned n)
+{
+    char line[3 * 16 + 1];
+    unsigned i, offset;
+
+    for (offset = 0; offset < n; offset += 16) {
+        unsigned len = n - offset < 16 ? n - offset : 16;
+        for (i = 0; i < len; i++)
+            snprintf(line + 3 * i, 4, "%02X ", data[offset + i]);
+        line[3 * len] = '\0';
+        log_line("    vpad info %s +%02x: %s", what, offset, line);
+    }
+}
+
+static void diag_controller_info(const char *label, int32_t user, int type, int index,
+                                 int32_t known_handle)
+{
+    unsigned char basic[PAD_INFO_BYTES], extended[PAD_INFO_BYTES];
+    int32_t handle = known_handle, got = known_handle, r1, r2;
+    int temporary = 0;
+
+    if (handle < 0) {
+        got = p_get_handle(user, type, index);
+        handle = got;
+        if (handle < 0) {
+            handle = p_open(user, type, index, NULL);
+            temporary = handle >= 0;
+        }
+    }
+    if (handle < 0) {
+        log_line("  vpad diag: %s user %#x type %d index %d -> GetHandle %#x; Open %#x",
+                 label, (unsigned)user, type, index, (unsigned)got, (unsigned)handle);
+        return;
+    }
+
+    memset(basic, 0xA5, sizeof basic);
+    memset(extended, 0xA5, sizeof extended);
+    r1 = p_info(handle, basic);
+    r2 = p_ext_info(handle, extended);
+    log_line("  vpad diag: %s user %#x type %d index %d handle %#x%s -> info %#x ext %#x",
+             label, (unsigned)user, type, index, (unsigned)handle,
+             temporary ? " (opened then closed)" : "", (unsigned)r1, (unsigned)r2);
+    if (r1 == 0) diag_dump_info("info", basic, 64);
+    if (r2 == 0) diag_dump_info("ext ", extended, 96);
+    if (temporary) p_close(handle);
+}
+
+static void diag_all_controller_info(int32_t user, int32_t virtual_handle)
+{
+    int32_t users[4] = { -1, -1, -1, -1 };
+    int i, type, index;
+
+    log_line("  vpad diag: public controller-information probe begins (read-only)");
+    diag_controller_info("new virtual", user, VIRTUAL_DEVICE_DUALSENSE, -1,
+                         virtual_handle);
+    if (p_login_list(users) != 0) {
+        log_line("  vpad diag: could not list signed-in users");
+        return;
+    }
+    for (i = 0; i < 4; i++) {
+        if (users[i] < 0) continue;
+        for (type = 0; type <= VIRTUAL_DEVICE_DUALSENSE; type += VIRTUAL_DEVICE_DUALSENSE)
+            for (index = 0; index < 4; index++)
+                diag_controller_info("public pad", users[i], type, index, -1);
+    }
+    log_line("  vpad diag: public controller-information probe complete");
 }
 
 /* ---- identification through the kernel log ------------------------------ */
@@ -464,6 +551,21 @@ int32_t vpad_sce_add(char *why, int whylen)
                  (unsigned)user, (unsigned)r, press == 0 ? "delivered" : "failed");
         goto out;
     }
+    if (g_info_probe) {
+        /* The controller-information getters reject a just-created device
+         * until its MBus user binding has completed.  This remains read-only. */
+        diag_all_controller_info(user, handle);
+        g_info_probe = 0;
+    }
+    if (g_shellui_info_probe) {
+        int32_t users[4] = { -1, -1, -1, -1 };
+
+        if (p_login_list(users) == 0)
+            shellui_pad_info_probe(users, -1);
+        else
+            log_line("  vpad diag: ShellUI pad probe: could not list signed-in users");
+        g_shellui_info_probe = 0;
+    }
     snprintf(why, (size_t)whylen, "device %#llx bound to user %#x",
              (unsigned long long)dev, (unsigned)user);
 
@@ -482,6 +584,20 @@ static uint8_t axis(int16_t v)     { return (uint8_t)(((int)v + 32768) >> 8); }
 static uint8_t axis_inv(int16_t v) { return (uint8_t)((32767 - (int)v) >> 8); }
 
 int vpad_sce_ready(void) { return g_ready; }
+
+void vpad_sce_set_info_probe(int enabled)
+{
+    g_info_probe = enabled != 0;
+    if (g_info_probe)
+        log_line("  vpad diag: will dump read-only controller information after pad creation");
+}
+
+void vpad_sce_set_shellui_info_probe(int enabled)
+{
+    g_shellui_info_probe = enabled != 0;
+    if (g_shellui_info_probe)
+        log_line("  vpad diag: will inspect existing pad records from SceShellUI after binding");
+}
 
 /* ---- diagnostics: why InsertData refuses ------------------------------- */
 

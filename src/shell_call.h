@@ -29,4 +29,28 @@ int shell_call(const char *process, const char *lib, const char *sym,
  * reports were accepted by scePadVirtualDeviceInsertData. */
 int shellui_press_ps(int32_t handle, const void *data, size_t len);
 
+/* Enumerates ShellUI's existing pad handles and reads the public controller
+ * information records into temporary ShellUI stack storage.  It only logs
+ * the results and never opens, binds, or feeds a device. */
+void shellui_pad_info_probe(const int32_t users[4], int32_t known_handle);
+
+/* Copies the loaded code bytes of scePadVirtualDeviceAddDevice from ShellUI
+ * into `path` for offline disassembly.  No function is invoked in ShellUI;
+ * the process is only briefly stopped while ptrace reads its executable map.
+ * Returns 0 on success. */
+int shellui_dump_pad_adddevice_code(const char *path);
+
+/* Logs which likely MBus battery/status exports are present in ShellUI.  It
+ * resolves symbols only and never invokes one. */
+int shellui_mbus_symbol_probe(void);
+
+/* Copies the loaded MBus device-function setter implementation for offline
+ * disassembly.  The setter itself is never invoked. */
+int shellui_dump_mbus_setfunction_code(const char *path);
+
+/* Waits for one normal ShellUI call to the MBus device-function setter and
+ * logs its private request bytes.  The temporary breakpoint is restored
+ * before the intercepted call resumes; no MBus call is synthesized. */
+int shellui_capture_mbus_setfunction_request(void);
+
 #endif

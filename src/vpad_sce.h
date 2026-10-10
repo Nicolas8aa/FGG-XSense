@@ -22,6 +22,14 @@
  * unavailable, with the original credentials put back. */
 int vpad_sce_init(void);
 
+/* Enables a one-shot, read-only dump of libScePad controller-information
+ * records when the next Sony virtual pad is created. */
+void vpad_sce_set_info_probe(int enabled);
+
+/* Enables the one-shot, read-only controller-information probe from the
+ * SceShellUI process after the next successful MBus bind. */
+void vpad_sce_set_shellui_info_probe(int enabled);
+
 /* Puts the original credentials back. */
 void vpad_sce_shutdown(void);
 
