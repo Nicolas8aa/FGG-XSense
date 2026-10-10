@@ -437,7 +437,7 @@ int mt76_radio_remove_client(mt76 *m, int wcid)
            mt76_write_burst(m, MT_WCID_ADDR(wcid), zero, sizeof zero);
 }
 
-int mt76_radio_init(mt76 *m, mt76_radio *r)
+int mt76_radio_init(mt76 *m, mt76_radio *r, int warm)
 {
     memset(r, 0, sizeof *r);
 
@@ -451,7 +451,18 @@ int mt76_radio_init(mt76 *m, mt76_radio *r)
     if (!calibrate_crystal(m))               return step_failed(m, "crystal calibration");
     if (!init_address(m, r))                 return step_failed(m, "MAC address");
     if (!set_idle_time(m))                   return step_failed(m, "idle time");
-    if (!calibrate_radio(m))                 return step_failed(m, "radio calibration");
+    if (!calibrate_radio(m)) {
+        if (!warm) return step_failed(m, "radio calibration");
+        /* After the firmware restarted in place the chip still holds the
+         * previous session's calibration, and the calibration commands are
+         * refused. Keep it, and turn reception and transmission back on as
+         * xone's resume does. */
+        log_line("  radio: calibration refused on a restarted radio (error %d) -- "
+                 "keeping the previous one", m->err);
+        if (!mt76_wr(m, MT_MAC_SYS_CTRL,
+                     MT_MAC_SYS_CTRL_ENABLE_RX | MT_MAC_SYS_CTRL_ENABLE_TX))
+            return step_failed(m, "radio enable");
+    }
     if (!init_channels(m, r))                return step_failed(m, "channels");
 
     /* Mandatory delay after a channel change. */

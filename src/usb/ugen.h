@@ -78,4 +78,8 @@ int ugen_fs_complete(ugen *u, ugen_completion *c);
  * flight. Returns 1 with `c` filled, 0 on timeout. */
 int ugen_fs_wait(ugen *u, int slot, int timeout_ms, ugen_completion *c);
 
+/* Clears a stall on `slot`'s endpoint, so the next transfer can go through.
+ * Returns 0 on failure. */
+int ugen_fs_clear_stall(ugen *u, int slot);
+
 #endif
