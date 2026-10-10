@@ -569,6 +569,22 @@ static void wlan_frame(dlink *l, const unsigned char *p, uint32_t len)
          * sender as one of its stations at all; frames from unknown senders
          * are dropped. (The link is not encrypted, so the firmware's own
          * station match is by address too: this trusts nothing more.) */
+        if (wcid == 255) {
+            /* After the firmware is restarted in place it does not take our
+             * client registration, and every frame from a controller comes
+             * as station 255 ("unknown"). Such a frame is accepted only from
+             * a controller associated with us right now -- which, with no
+             * link encryption, is the same address match the firmware itself
+             * would make. Anyone else is still dropped. */
+            int i, found = 0;
+            for (i = 0; i < MT76_MAX_CLIENTS && !found; i++)
+                if (l->clients[i].used && memcmp(l->clients[i].addr, addr2, 6) == 0)
+                    found = i + 1;
+            if (found && !l->unregistered++)
+                log_line("  adapter: client %d's frames come unregistered (station 255) "
+                         "-- matching them by address", found);
+            wcid = found;
+        }
         if (wcid < 1 || wcid > MT76_MAX_CLIENTS) {
             l->ignored++;
             break;

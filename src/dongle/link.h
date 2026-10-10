@@ -43,7 +43,7 @@ typedef struct {
     link_client clients[MT76_MAX_CLIENTS];   /* index = wcid - 1 */
     int         nclients;
 
-    long messages, wlan, errors, ignored, refused, renumbered, events[16];
+    long messages, wlan, errors, ignored, refused, renumbered, unregistered, events[16];
     int  silent_drops;   /* consecutive silent clients dropped */
 } dlink;
 
