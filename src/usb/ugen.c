@@ -245,3 +245,9 @@ int ugen_fs_clear_stall(ugen *u, int slot)
     cs.ep_index = (uint8_t)slot;
     return ioctl(u->fd, USB_FS_CLEAR_STALL_SYNC, &cs) == 0;
 }
+
+int ugen_reenumerate(ugen *u)
+{
+    int unused = 0;
+    return ioctl(u->fd, USB_DEVICEENUMERATE, &unused) == 0;
+}
