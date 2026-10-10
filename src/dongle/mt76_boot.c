@@ -22,9 +22,6 @@
  * before then can see a false success (xone commit 525a27e). */
 #define START_SETTLE_US 500000
 
-/* Each poll lasts up to 0.75 s; together about 3 s for a reset to finish. */
-#define RESET_WAIT_POLLS 4
-
 #define CFG(r) ((uint32_t)(r) | MT_VEND_TYPE_CFG)
 
 static mt76_boot_result fail(mt76 *m, const char *what)
@@ -74,37 +71,39 @@ static int send_part(mt76 *m, uint32_t offset, const unsigned char *data,
 
 static mt76_boot_result cold(mt76 *m, const mt76_fw *fw);
 
-/* Firmware already running: reset it and upload it again, as xow does.
+/* Firmware already running: reset it, then either upload it again or let it
+ * carry on, depending on what the reset left.
  *
- * xone instead restarts the running firmware in place and waits for bit 31
- * of FCE_DMA_ADDR, but on a 02E6 adapter on this console that bit never
- * appears (the register stays at 1). A full reset and upload takes under a
- * second and always ends in the same state as a cold start. */
+ * Two outcomes have been seen on a 02E6 adapter on this console. Shortly
+ * after a cold start, FCE_DMA_ADDR clears to 0: the firmware is gone and is
+ * uploaded again, as xow does. Once the radio has been running, it settles
+ * at 0x80000000 instead -- the state xone waits for after restarting the
+ * firmware in place, and treats as running. Uploading over it is sometimes
+ * refused and then locks the adapter's DMA until it is replugged, so in that
+ * case nothing is uploaded and the radio set-up follows directly. */
 static mt76_boot_result warm(mt76 *m, const mt76_fw *fw)
 {
     mt76_boot_result r;
     uint32_t last = 0;
-    int i;
 
     if (!rf_patch(m)) return fail(m, "RF patch");
     if (!mt76_dev_mode(m, DEV_MODE_RESET)) return fail(m, "firmware reset");
 
-    /* While the reset is in progress the register reads 0x80000000; xow
-     * waits for it to read anything else. Uploading before then can be
-     * refused outright, so allow it a few seconds. */
-    for (i = 0; i < RESET_WAIT_POLLS; i++) {
-        mt76_poll(m, CFG(MT_FCE_DMA_ADDR), 0x80000000, 0, &last);
-        if (mt76_gone(m)) return fail(m, "firmware reset");
-        if (!(last & 0x80000000)) break;
-    }
+    mt76_poll(m, CFG(MT_FCE_DMA_ADDR), 0xFFFFFFFF, 0, &last);
+    if (mt76_gone(m)) return fail(m, "firmware reset");
     log_line("  adapter: after reset FCE_DMA_ADDR %08X", (unsigned)last);
+
+    if (last == 0) {
+        r = cold(m, fw);
+        return r == MT76_BOOT_COLD ? MT76_BOOT_WARM : r;
+    }
     if (last & 0x80000000) {
-        log_line("  adapter: firmware reset did not finish");
-        return MT76_BOOT_FAILED;
+        usleep(START_SETTLE_US);
+        return MT76_BOOT_RESTARTED;
     }
 
-    r = cold(m, fw);
-    return r == MT76_BOOT_COLD ? MT76_BOOT_WARM : r;
+    log_line("  adapter: unexpected state after reset -- unplug and replug it");
+    return MT76_BOOT_FAILED;
 }
 
 static mt76_boot_result cold(mt76 *m, const mt76_fw *fw)
@@ -161,6 +160,7 @@ const char *mt76_boot_name(mt76_boot_result r)
     switch (r) {
     case MT76_BOOT_COLD:   return "cold start: firmware uploaded and running";
     case MT76_BOOT_WARM:   return "warm start: firmware reset, re-uploaded and running";
+    case MT76_BOOT_RESTARTED: return "warm start: firmware restarted in place";
     case MT76_BOOT_GONE:   return "left the bus";
     case MT76_BOOT_FAILED: return "failed";
     }
