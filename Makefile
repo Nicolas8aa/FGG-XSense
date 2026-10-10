@@ -29,7 +29,7 @@ SRCS := src/main.c src/pads.c src/vpad.c src/lock.c src/config.c src/log.c \
         src/dongle/link.c
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS))
 
-.PHONY: all clean test probe check
+.PHONY: all clean test probe probe-bt check
 
 all: $(ELF)
 
@@ -43,7 +43,7 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<
 
--include $(OBJS:.o=.d) $(BUILD)/tools/probe.d
+-include $(OBJS:.o=.d) $(BUILD)/tools/probe.d $(BUILD)/tools/probe_bt.d
 
 test: $(ELF)
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $^
@@ -67,5 +67,11 @@ check:
 		-o $(BUILD)/host/test_core $(HOST_TESTS)
 	$(BUILD)/host/test_core
 
+# First contact with the console's Bluetooth chip: see tools/probe_bt.c.
+probe-bt: probe_bt.elf
+
+probe_bt.elf: $(BUILD)/tools/probe_bt.o $(BUILD)/src/log.o $(BUILD)/src/usb/ugen.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 clean:
-	rm -rf $(BUILD) $(ELF) probe.elf
+	rm -rf $(BUILD) $(ELF) probe.elf probe_bt.elf
