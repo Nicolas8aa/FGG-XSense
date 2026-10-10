@@ -34,10 +34,6 @@
 
 static int g_trace;
 
-/* Set once a USB reset has been tried this session, so it is never repeated
- * in a loop; cleared again by a cold start. */
-static int g_usb_reset_tried;
-
 void dongle_set_trace(int on) { g_trace = on; }
 
 int dongle_match(unsigned vendor, unsigned product,
@@ -165,24 +161,6 @@ void *dongle_run(void *arg)
     log_line("  adapter firmware: checksum ok, ILM %u + DLM %u, built \"%s\"",
              fw.ilm_len, fw.dlm_len, fw.build_time);
 
-    /* Firmware left running by an earlier session restarts unreliably in
-     * place. Once per session, try resetting the adapter's USB connection
-     * first, in case that brings it back cold; the scan picks it up again. */
-    {
-        uint32_t state = 0;
-        if (!g_usb_reset_tried &&
-            mt76_rr(&m, MT_FCE_DMA_ADDR | MT_VEND_TYPE_CFG, &state) && state != 0) {
-            g_usb_reset_tried = 1;
-            log_line("  adapter %s: firmware still running (FCE_DMA_ADDR %08X) -- "
-                     "resetting its USB connection", node, (unsigned)state);
-            if (ugen_reenumerate(m.u)) {
-                log_line("  adapter %s: USB reset requested; waiting for it to return", node);
-                goto done;
-            }
-            log_line("  adapter %s: USB reset refused: %s", node, strerror(errno));
-        }
-    }
-
     ugen_set_config(m.u, 0);
     ugen_claim(m.u, 0);
     if (!ugen_fs_init(m.u, SLOTS) ||
@@ -204,7 +182,6 @@ void *dongle_run(void *arg)
     for (i = 1; i <= BOOT_ATTEMPTS; i++) {
         r = mt76_boot(&m, &fw);
         log_line("  adapter %s: %s", node, mt76_boot_name(r));
-        if (r == MT76_BOOT_COLD) g_usb_reset_tried = 0;
         if (r != MT76_BOOT_FAILED || i == BOOT_ATTEMPTS) break;
         log_line("  adapter %s: retrying (attempt %d of %d)", node, i + 1,
                  BOOT_ATTEMPTS);

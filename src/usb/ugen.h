@@ -82,8 +82,4 @@ int ugen_fs_wait(ugen *u, int slot, int timeout_ms, ugen_completion *c);
  * Returns 0 on failure. */
 int ugen_fs_clear_stall(ugen *u, int slot);
 
-/* Asks the host to reset the device's USB connection and enumerate it
- * again. The node goes away and comes back. Returns 0 if refused. */
-int ugen_reenumerate(ugen *u);
-
 #endif
