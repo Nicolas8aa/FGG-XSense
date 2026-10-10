@@ -12,6 +12,7 @@
  *   gip/gip_wired.c   a controller on a USB cable, one thread each
  *   usb/ugen.c        USB device nodes and transfer slots
  *   usb/usb_enum.c    finding devices without two backends sharing one
+ *   dongle/           the Xbox Wireless Adapter (firmware check so far)
  *
  * Resident: it waits for controllers, serves them while connected and waits
  * again, so it can be autoloaded before one is plugged in. Holding View+Menu
@@ -20,6 +21,7 @@
  * The PS button cannot be sent through a virtual pad -- see the README.
  */
 #include "config.h"
+#include "dongle/dongle.h"
 #include "gip/gip_wired.h"
 #include "lock.h"
 #include "log.h"
@@ -49,6 +51,10 @@ typedef struct {
 } backend;
 
 static backend g_backends[PADS_MAX];
+
+/* The wireless adapter, held from the moment it is seen so no scan opens it
+ * again. Only checked for now; the radio is brought up in a later milestone. */
+static char g_adapter[USB_NODE_LEN];
 
 static void *wired_thread(void *arg)
 {
@@ -94,6 +100,10 @@ static int scan(void)
         b->active = 1;
         started++;
     }
+
+    if (!g_adapter[0] && usb_find_and_own(dongle_match, g_adapter))
+        dongle_report(g_adapter);
+
     return started;
 }
 
@@ -165,6 +175,8 @@ int main(void)
             g_backends[i].active = 0;
         }
     }
+
+    if (g_adapter[0]) usb_disown(g_adapter);
 
     notify("FGG-XSense: stopped");
     lock_release();

@@ -5,7 +5,9 @@
  * raw report directly. The kernel report must come out byte for byte the same,
  * so the old translation is kept here verbatim as the reference.
  */
+#include "dongle/mt76_fw.h"
 #include "gip/gip_proto.h"
+#include "sha256.h"
 #include "vpad.h"
 
 #include <stdint.h>
@@ -187,12 +189,75 @@ static void test_init_sequence(void)
           buf[5] == 0x01 && buf[6] == 0x14, "LED message wrong");
 }
 
+static void test_sha256(void)
+{
+    /* FIPS 180-4 example vectors. */
+    static const char *msg2 =
+        "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    char hex[2 * SHA256_SIZE + 1];
+    unsigned char million[1001];
+    unsigned char d[SHA256_SIZE];
+    sha256_ctx c;
+    int i;
+
+    sha256_hex("", 0, hex);
+    CHECK(strcmp(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") == 0,
+          "sha256(\"\") = %s", hex);
+    sha256_hex("abc", 3, hex);
+    CHECK(strcmp(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 0,
+          "sha256(abc) = %s", hex);
+    sha256_hex(msg2, strlen(msg2), hex);
+    CHECK(strcmp(hex, "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1") == 0,
+          "sha256(448-bit message) = %s", hex);
+
+    /* A million 'a's, fed in uneven pieces to exercise the block buffer. */
+    memset(million, 'a', sizeof million);
+    sha256_init(&c);
+    for (i = 0; i < 1000; i++) sha256_update(&c, million, (size_t)(i % 2 ? 999 : 1001));
+    sha256_final(&c, d);
+    for (i = 0; i < SHA256_SIZE; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    CHECK(strcmp(hex, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0") == 0,
+          "sha256(million a) = %s", hex);
+}
+
+static void test_fw_parse(void)
+{
+    unsigned char img[MT76_FW_HEADER_SIZE + 10];
+    char why[160];
+    mt76_fw fw;
+
+    memset(img, 0, sizeof img);
+    img[0] = 6;                    /* ILM 6 bytes */
+    img[4] = 4;                    /* DLM 4 bytes */
+    img[8] = 0x34; img[9] = 0x12;  /* build version */
+    img[10] = 0x01; img[11] = 0x02;
+    memcpy(img + 16, "201703101234____", 16);
+
+    CHECK(mt76_fw_parse(img, sizeof img, &fw, why, (int)sizeof why),
+          "valid image refused: %s", why);
+    CHECK(fw.ilm_len == 6 && fw.dlm_len == 4 && fw.build_version == 0x1234 &&
+          fw.fw_version == 0x0201, "header fields wrong");
+    CHECK(fw.ilm == img + 32 && fw.dlm == img + 38, "image offsets wrong");
+    CHECK(strcmp(fw.build_time, "201703101234____") == 0, "build time wrong");
+
+    img[0] = 7;   /* one byte more than the file holds */
+    CHECK(!mt76_fw_parse(img, sizeof img, &fw, why, (int)sizeof why),
+          "overlong ILM accepted");
+    img[0] = 0xFF; img[1] = 0xFF; img[2] = 0xFF; img[3] = 0xFF;
+    CHECK(!mt76_fw_parse(img, sizeof img, &fw, why, (int)sizeof why),
+          "wrapping ILM length accepted");
+    CHECK(!mt76_fw_parse(img, 10, &fw, why, (int)sizeof why),
+          "headerless file accepted");
+}
+
 int main(void)
 {
     test_translation_unchanged();
     test_decode_rejects();
     test_ack();
     test_init_sequence();
+    test_sha256();
+    test_fw_parse();
 
     if (g_failures) {
         fprintf(stderr, "%d failure(s)\n", g_failures);
